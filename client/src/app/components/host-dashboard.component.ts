@@ -2,7 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { HostAuthService } from '../services/host-auth.service';
-import { EventItem, SlidoSocketService } from '../services/slido-socket.service';
+import { EventItem, ADSQuizMasterSocketService } from '../services/ADSQuizMaster-socket.service';
 
 @Component({
   selector: 'app-host-dashboard',
@@ -113,7 +113,7 @@ import { EventItem, SlidoSocketService } from '../services/slido-socket.service'
 })
 export class HostDashboardComponent implements OnInit {
   auth = inject(HostAuthService);
-  private slido = inject(SlidoSocketService);
+  private ADSQuizMaster = inject(ADSQuizMasterSocketService);
   private router = inject(Router);
 
   events = signal<EventItem[]>([]);
@@ -127,7 +127,7 @@ export class HostDashboardComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     try {
       await this.auth.loadProfile();
-      this.events.set(await this.slido.listHostEvents());
+      this.events.set(await this.ADSQuizMaster.listHostEvents());
     } catch {
       this.errorMsg.set('Session expired. Please sign in again.');
       await this.logout();
@@ -139,7 +139,7 @@ export class HostDashboardComponent implements OnInit {
     this.creating.set(true);
     this.errorMsg.set(null);
     try {
-      const created = await this.slido.createEvent(this.title.trim(), this.moderationEnabled);
+      const created = await this.ADSQuizMaster.createEvent(this.title.trim(), this.moderationEnabled);
       this.events.update((list) => [created, ...list]);
       this.title = '';
     } catch (err: any) {
@@ -160,7 +160,7 @@ export class HostDashboardComponent implements OnInit {
 
   async logout(): Promise<void> {
     this.auth.logout();
-    this.slido.refreshSocketAuth();
+    this.ADSQuizMaster.refreshSocketAuth();
     await this.router.navigate(['/login']);
   }
 }

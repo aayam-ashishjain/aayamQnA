@@ -1,7 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { SlidoSocketService } from '../services/slido-socket.service';
+import { ADSQuizMasterSocketService } from '../services/ADSQuizMaster-socket.service';
 import { QuizBuilderComponent } from './quiz-builder.component';
 
 @Component({
@@ -13,15 +13,15 @@ import { QuizBuilderComponent } from './quiz-builder.component';
       <header class="console-header">
         <div>
           <a routerLink="/dashboard" class="back-link">← All Events</a>
-          <h1>{{ slido.eventTitle() || 'Host Console' }} <span>#{{ slido.joinCode() }}</span></h1>
+          <h1>{{ ADSQuizMaster.eventTitle() || 'Host Console' }} <span>#{{ ADSQuizMaster.joinCode() }}</span></h1>
         </div>
         <div class="header-actions">
-          <a [routerLink]="['/present', slido.joinCode()]" target="_blank" class="btn">Open Present Mode</a>
-          <button (click)="slido.downloadQaCsv()" class="btn secondary">Export Q&amp;A CSV</button>
+          <a [routerLink]="['/present', ADSQuizMaster.joinCode()]" target="_blank" class="btn">Open Present Mode</a>
+          <button (click)="ADSQuizMaster.downloadQaCsv()" class="btn secondary">Export Q&amp;A CSV</button>
         </div>
       </header>
 
-      @if (slido.errorBanner(); as err) {
+      @if (ADSQuizMaster.errorBanner(); as err) {
         <div class="error-toast">{{ err }}</div>
       }
 
@@ -32,8 +32,8 @@ import { QuizBuilderComponent } from './quiz-builder.component';
             <div class="mod-card pending">
               <p>{{ q.text }} — <small>{{ q.authorName }}</small></p>
               <div class="btn-row">
-                <button (click)="slido.moderateQuestion(q._id, 'approved')">Approve</button>
-                <button (click)="slido.moderateQuestion(q._id, 'archived')" class="danger">Dismiss</button>
+                <button (click)="ADSQuizMaster.moderateQuestion(q._id, 'approved')">Approve</button>
+                <button (click)="ADSQuizMaster.moderateQuestion(q._id, 'archived')" class="danger">Dismiss</button>
               </div>
             </div>
           } @empty {
@@ -45,11 +45,11 @@ import { QuizBuilderComponent } from './quiz-builder.component';
             <div class="mod-card" [class.highlighted]="q.isHighlighted">
               <p><strong>[▲ {{ q.upvotes }}]</strong> {{ q.text }} — <small>{{ q.authorName }}</small></p>
               <div class="btn-row">
-                <button (click)="slido.moderateQuestion(q._id, undefined, !q.isHighlighted)">
+                <button (click)="ADSQuizMaster.moderateQuestion(q._id, undefined, !q.isHighlighted)">
                   {{ q.isHighlighted ? 'Unhighlight' : 'Highlight' }}
                 </button>
-                <button (click)="slido.moderateQuestion(q._id, 'answered', false)">Mark Answered</button>
-                <button (click)="slido.moderateQuestion(q._id, 'archived', false)" class="danger">Archive</button>
+                <button (click)="ADSQuizMaster.moderateQuestion(q._id, 'answered', false)">Mark Answered</button>
+                <button (click)="ADSQuizMaster.moderateQuestion(q._id, 'archived', false)" class="danger">Archive</button>
               </div>
             </div>
           } @empty {
@@ -89,13 +89,13 @@ import { QuizBuilderComponent } from './quiz-builder.component';
                     <strong>{{ p.question }}</strong>
                     <small>{{ p.type }} · {{ p.status }}</small>
                   </div>
-                  <button type="button" class="text-danger" (click)="slido.deletePoll(p._id)">Delete</button>
+                  <button type="button" class="text-danger" (click)="ADSQuizMaster.deletePoll(p._id)">Delete</button>
                 </div>
                 <div class="btn-row">
-                  <button (click)="slido.setPollState(p._id, 'active', true)">Launch</button>
-                  <button (click)="slido.setPollState(p._id, 'active', false)">Launch Hidden</button>
-                  <button (click)="slido.setPollState(p._id, 'locked', true)">Lock</button>
-                  <button (click)="slido.setPollState(p._id, 'draft', false)">Hide</button>
+                  <button (click)="ADSQuizMaster.setPollState(p._id, 'active', true)">Launch</button>
+                  <button (click)="ADSQuizMaster.setPollState(p._id, 'active', false)">Launch Hidden</button>
+                  <button (click)="ADSQuizMaster.setPollState(p._id, 'locked', true)">Lock</button>
+                  <button (click)="ADSQuizMaster.setPollState(p._id, 'draft', false)">Hide</button>
                 </div>
               </div>
             } @empty {
@@ -147,7 +147,7 @@ import { QuizBuilderComponent } from './quiz-builder.component';
   `]
 })
 export class HostConsoleComponent implements OnInit {
-  slido = inject(SlidoSocketService);
+  ADSQuizMaster = inject(ADSQuizMasterSocketService);
   private route = inject(ActivatedRoute);
 
   rightTab = signal<'polls' | 'quiz'>('quiz');
@@ -155,15 +155,15 @@ export class HostConsoleComponent implements OnInit {
   newPollType: 'multiple_choice' | 'word_cloud' | 'rating' | 'open_text' = 'multiple_choice';
   rawOptions = '';
 
-  pending = computed(() => this.slido.questions().filter((q) => q.status === 'pending'));
-  live = computed(() => this.slido.questions().filter((q) => q.status === 'approved'));
-  standardPolls = computed(() => this.slido.polls().filter((p) => p.type !== 'quiz'));
-  quizCount = computed(() => this.slido.polls().filter((p) => p.type === 'quiz').length);
+  pending = computed(() => this.ADSQuizMaster.questions().filter((q) => q.status === 'pending'));
+  live = computed(() => this.ADSQuizMaster.questions().filter((q) => q.status === 'approved'));
+  standardPolls = computed(() => this.ADSQuizMaster.polls().filter((p) => p.type !== 'quiz'));
+  quizCount = computed(() => this.ADSQuizMaster.polls().filter((p) => p.type === 'quiz').length);
 
   ngOnInit(): void {
     const code = this.route.snapshot.paramMap.get('code');
     if (code) {
-      this.slido.joinRoom(code, 'host');
+      this.ADSQuizMaster.joinRoom(code, 'host');
     }
   }
 
@@ -180,7 +180,7 @@ export class HostConsoleComponent implements OnInit {
         votes: 0
       }));
 
-    await this.slido.createPoll({
+    await this.ADSQuizMaster.createPoll({
       question: this.newPollQuestion.trim(),
       type: this.newPollType,
       options

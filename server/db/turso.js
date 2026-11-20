@@ -1,7 +1,7 @@
 const { createClient } = require('@libsql/client');
 
 const db = createClient({
-  url: process.env.TURSO_DATABASE_URL || 'file:slido.db',
+  url: process.env.TURSO_DATABASE_URL || 'file:ADSQuizMaster.db',
   authToken: process.env.TURSO_AUTH_TOKEN || undefined
 });
 

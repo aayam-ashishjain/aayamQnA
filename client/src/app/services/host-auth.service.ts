@@ -13,7 +13,7 @@ export interface HostUser {
 export class HostAuthService {
   private http = inject(HttpClient);
   private apiUrl = environment.apiUrl;
-  private readonly TOKEN_KEY = 'slido_host_jwt';
+  private readonly TOKEN_KEY = 'ADSQuizMaster_host_jwt';
 
   readonly token = signal<string | null>(localStorage.getItem(this.TOKEN_KEY));
   readonly host = signal<HostUser | null>(null);

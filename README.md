@@ -1,4 +1,4 @@
-# Slido Clone (Turso + Express + Socket.IO + Angular 18) — v2
+# ADSQuizMaster Clone (Turso + Express + Socket.IO + Angular 18) — v2
 
 Real-time audience Q&A, live polls (multiple choice, word cloud, rating, open text), full Quiz Studio (timed auto-lock questions, correct-answer reveal, speed-scored leaderboard), host moderation, JWT authentication, and a projector-ready Present Mode with scannable QR overlay.
 
@@ -13,7 +13,7 @@ Real-time audience Q&A, live polls (multiple choice, word cloud, rating, open te
 
 Copy these 7 files from the unzipped folder into your existing workspace, then restart `server`:
 1. `server/server.js`
-2. `client/src/app/services/slido-socket.service.ts`
+2. `client/src/app/services/ADSQuizMaster-socket.service.ts`
 3. `client/src/app/components/host-login.component.ts`
 4. `client/src/app/components/host-dashboard.component.ts`
 5. `client/src/app/components/host-console.component.ts`

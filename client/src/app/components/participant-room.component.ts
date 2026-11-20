@@ -1,7 +1,7 @@
 import { Component, OnDestroy, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { SlidoSocketService } from '../services/slido-socket.service';
+import { ADSQuizMasterSocketService } from '../services/ADSQuizMaster-socket.service';
 
 @Component({
   selector: 'app-participant-room',
@@ -11,24 +11,24 @@ import { SlidoSocketService } from '../services/slido-socket.service';
     <div class="room-shell">
       <header class="room-header">
         <div>
-          <h2>{{ slido.eventTitle() || 'Join Live Session' }}</h2>
-          @if (slido.joinCode()) {
-            <small>#{{ slido.joinCode() }}</small>
+          <h2>{{ ADSQuizMaster.eventTitle() || 'Join Live Session' }}</h2>
+          @if (ADSQuizMaster.joinCode()) {
+            <small>#{{ ADSQuizMaster.joinCode() }}</small>
           }
         </div>
         <div class="tabs">
           <button (click)="tab.set('qa')" [class.active]="tab() === 'qa'">Q&amp;A</button>
           <button (click)="tab.set('polls')" [class.active]="tab() === 'polls'">
-            Polls @if (slido.activePoll()) { <span class="dot">●</span> }
+            Polls @if (ADSQuizMaster.activePoll()) { <span class="dot">●</span> }
           </button>
         </div>
       </header>
 
-      @if (slido.errorBanner(); as err) {
+      @if (ADSQuizMaster.errorBanner(); as err) {
         <div class="error-toast">{{ err }}</div>
       }
 
-      @if (!slido.joinCode()) {
+      @if (!ADSQuizMaster.joinCode()) {
         <form (ngSubmit)="joinByCode()" class="card join-box">
           <input [(ngModel)]="codeInput" name="code" placeholder="Enter 6-character code" required />
           <button type="submit" class="primary-btn">Join Room</button>
@@ -51,8 +51,8 @@ import { SlidoSocketService } from '../services/slido-socket.service';
                 <small>{{ q.authorName }} · {{ q.status }}</small>
                 <button
                   class="vote-btn"
-                  (click)="slido.toggleUpvote(q._id)"
-                  [class.voted]="q.upvotedBy.includes(slido.clientId)">
+                  (click)="ADSQuizMaster.toggleUpvote(q._id)"
+                  [class.voted]="q.upvotedBy.includes(ADSQuizMaster.clientId)">
                   ▲ {{ q.upvotes }}
                 </button>
               </footer>
@@ -62,24 +62,24 @@ import { SlidoSocketService } from '../services/slido-socket.service';
           }
         </div>
       } @else {
-        @if (slido.quizAutoState().phase === 'finished') {
+        @if (ADSQuizMaster.quizAutoState().phase === 'finished') {
           <div class="quiz-banner done">
             Quiz finished! Check the main screen for the final leaderboard.
           </div>
-        } @else if (slido.quizAutoState().running) {
+        } @else if (ADSQuizMaster.quizAutoState().running) {
           <div class="quiz-banner">
-            <span>Question {{ slido.quizAutoState().currentIndex + 1 }} of {{ slido.quizAutoState().total }}</span>
-            @if (slido.quizAutoState().paused) {
+            <span>Question {{ ADSQuizMaster.quizAutoState().currentIndex + 1 }} of {{ ADSQuizMaster.quizAutoState().total }}</span>
+            @if (ADSQuizMaster.quizAutoState().paused) {
               <strong>Paused</strong>
-            } @else if (slido.quizAutoState().phase === 'reveal' && phaseSecondsLeft() !== null) {
+            } @else if (ADSQuizMaster.quizAutoState().phase === 'reveal' && phaseSecondsLeft() !== null) {
               <strong>Next in {{ phaseSecondsLeft() }}s</strong>
-            } @else if (slido.quizAutoState().phase === 'leaderboard' && phaseSecondsLeft() !== null) {
+            } @else if (ADSQuizMaster.quizAutoState().phase === 'leaderboard' && phaseSecondsLeft() !== null) {
               <strong>Leaderboard · Next Q in {{ phaseSecondsLeft() }}s</strong>
             }
           </div>
         }
 
-        @if (slido.activePoll(); as poll) {
+        @if (ADSQuizMaster.activePoll(); as poll) {
           <section class="card poll-card">
             <div class="poll-head">
               <h3>{{ poll.question }}</h3>
@@ -120,7 +120,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
                 <button type="submit" class="primary-btn" [disabled]="poll.status === 'locked'">Submit</button>
               </form>
               <div class="cloud">
-                @for (w of slido.wordCloud(); track w.word) {
+                @for (w of ADSQuizMaster.wordCloud(); track w.word) {
                   <span [style.fontSize.px]="14 + w.count * 4">{{ w.word }} ({{ w.count }})</span>
                 }
               </div>
@@ -132,12 +132,12 @@ import { SlidoSocketService } from '../services/slido-socket.service';
                   <button
                     class="star-btn"
                     [disabled]="poll.status === 'locked'"
-                    (click)="slido.castVote({ pollId: poll._id, ratingValue: star })">
+                    (click)="ADSQuizMaster.castVote({ pollId: poll._id, ratingValue: star })">
                     {{ star }} ★
                   </button>
                 }
               </div>
-              @if (slido.ratingSummary(); as rs) {
+              @if (ADSQuizMaster.ratingSummary(); as rs) {
                 <p class="rating-meta">Average: <strong>{{ rs.average }} / 5</strong> ({{ rs.count }} votes)</p>
               }
             }
@@ -248,7 +248,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
   `]
 })
 export class ParticipantRoomComponent implements OnInit, OnDestroy {
-  slido = inject(SlidoSocketService);
+  ADSQuizMaster = inject(ADSQuizMasterSocketService);
   private route = inject(ActivatedRoute);
 
   tab = signal<'qa' | 'polls'>('qa');
@@ -267,7 +267,7 @@ export class ParticipantRoomComponent implements OnInit, OnDestroy {
 
   constructor() {
     effect(() => {
-      const poll = this.slido.activePoll();
+      const poll = this.ADSQuizMaster.activePoll();
       if (poll && poll._id !== this.lastPollId) {
         this.lastPollId = poll._id;
         this.pollShownAt = Date.now();
@@ -285,15 +285,15 @@ export class ParticipantRoomComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     const code = this.route.snapshot.paramMap.get('code');
     if (code) {
-      this.slido.joinRoom(code, 'participant');
+      this.ADSQuizMaster.joinRoom(code, 'participant');
     }
 
     this.tickHandle = setInterval(() => {
       const now = Date.now();
-      const endsAt = this.slido.pollEndsAt();
+      const endsAt = this.ADSQuizMaster.pollEndsAt();
       this.secondsLeft.set(endsAt ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : null);
 
-      const phaseEnd = this.slido.quizAutoState().phaseEndsAt;
+      const phaseEnd = this.ADSQuizMaster.quizAutoState().phaseEndsAt;
       this.phaseSecondsLeft.set(phaseEnd ? Math.max(0, Math.ceil((phaseEnd - now) / 1000)) : null);
     }, 250);
   }
@@ -303,16 +303,16 @@ export class ParticipantRoomComponent implements OnInit, OnDestroy {
   }
 
   visibleQuestions = computed(() =>
-    this.slido.questions().filter((q) => q.status === 'approved' || q.status === 'answered')
+    this.ADSQuizMaster.questions().filter((q) => q.status === 'approved' || q.status === 'answered')
   );
 
   totalVotes = computed(() =>
-    (this.slido.activePoll()?.options || []).reduce((sum, o) => sum + o.votes, 0)
+    (this.ADSQuizMaster.activePoll()?.options || []).reduce((sum, o) => sum + o.votes, 0)
   );
 
   joinByCode(): void {
     if (!this.codeInput.trim()) return;
-    this.slido.joinRoom(this.codeInput, 'participant');
+    this.ADSQuizMaster.joinRoom(this.codeInput, 'participant');
   }
 
   votePercent(count: number): number {
@@ -322,14 +322,14 @@ export class ParticipantRoomComponent implements OnInit, OnDestroy {
 
   ask(): void {
     if (!this.questionText.trim()) return;
-    this.slido.submitQuestion(this.questionText, this.authorName);
+    this.ADSQuizMaster.submitQuestion(this.questionText, this.authorName);
     this.questionText = '';
   }
 
   voteOption(pollId: string, optionId: string): void {
     if (this.selectedOptionId()) return;
     this.selectedOptionId.set(optionId);
-    this.slido.castVote({
+    this.ADSQuizMaster.castVote({
       pollId,
       optionId,
       displayName: this.authorName || 'Player',
@@ -339,7 +339,7 @@ export class ParticipantRoomComponent implements OnInit, OnDestroy {
 
   voteText(pollId: string): void {
     if (!this.textVote.trim()) return;
-    this.slido.castVote({ pollId, textValue: this.textVote });
+    this.ADSQuizMaster.castVote({ pollId, textValue: this.textVote });
     this.textVote = '';
   }
 }

@@ -73,7 +73,7 @@ const DEFAULT_AUTO_STATE: QuizAutoState = {
 };
 
 @Injectable({ providedIn: 'root' })
-export class SlidoSocketService {
+export class ADSQuizMasterSocketService {
   private http = inject(HttpClient);
   private auth = inject(HostAuthService);
   private apiUrl = environment.apiUrl;
@@ -105,7 +105,7 @@ export class SlidoSocketService {
   }
 
   private getOrCreateClientId(): string {
-    const key = 'slido_client_id';
+    const key = 'ADSQuizMaster_client_id';
     let id = localStorage.getItem(key);
     if (!id) {
       id = crypto.randomUUID();

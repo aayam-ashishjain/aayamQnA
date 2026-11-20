@@ -1,6 +1,6 @@
 import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { PollItem, SlidoSocketService } from '../services/slido-socket.service';
+import { PollItem, ADSQuizMasterSocketService } from '../services/ADSQuizMaster-socket.service';
 
 interface DraftOption {
   id: number;
@@ -17,42 +17,42 @@ interface DraftOption {
         <div class="runner-top">
           <div class="runner-stats">
             <strong>{{ quizQuestions().length }} Quiz Questions</strong>
-            <span>· {{ slido.leaderboard().length }} Players Scored</span>
+            <span>· {{ ADSQuizMaster.leaderboard().length }} Players Scored</span>
           </div>
           <div class="btn-row">
             <button
               type="button"
               class="stage-btn"
-              [class.active]="slido.stageLeaderboard()"
-              (click)="slido.setStageLeaderboard(!slido.stageLeaderboard())">
-              {{ slido.stageLeaderboard() ? 'Hide Leaderboard' : 'Show Leaderboard' }}
+              [class.active]="ADSQuizMaster.stageLeaderboard()"
+              (click)="ADSQuizMaster.setStageLeaderboard(!ADSQuizMaster.stageLeaderboard())">
+              {{ ADSQuizMaster.stageLeaderboard() ? 'Hide Leaderboard' : 'Show Leaderboard' }}
             </button>
             <button type="button" class="danger-btn" (click)="resetScores()">Reset Quiz</button>
           </div>
         </div>
 
-        @if (slido.quizAutoState().running) {
+        @if (ADSQuizMaster.quizAutoState().running) {
           <div class="auto-live-deck">
             <div class="auto-status">
               <span class="live-dot">●</span>
               <strong>
-                Q{{ slido.quizAutoState().currentIndex + 1 }} / {{ slido.quizAutoState().total }}
+                Q{{ ADSQuizMaster.quizAutoState().currentIndex + 1 }} / {{ ADSQuizMaster.quizAutoState().total }}
               </strong>
               <span>· {{ phaseText() }}</span>
-              @if (slido.quizAutoState().paused) {
+              @if (ADSQuizMaster.quizAutoState().paused) {
                 <span class="pause-pill">PAUSED</span>
               } @else if (phaseSecondsLeft() !== null) {
                 <span class="clock-pill">⏱ {{ phaseSecondsLeft() }}s</span>
               }
             </div>
             <div class="btn-row">
-              @if (slido.quizAutoState().paused) {
-                <button type="button" class="start-auto-btn" (click)="slido.resumeAutoQuiz()">▶ Resume</button>
+              @if (ADSQuizMaster.quizAutoState().paused) {
+                <button type="button" class="start-auto-btn" (click)="ADSQuizMaster.resumeAutoQuiz()">▶ Resume</button>
               } @else {
-                <button type="button" class="warn-btn" (click)="slido.pauseAutoQuiz()">❚❚ Pause</button>
+                <button type="button" class="warn-btn" (click)="ADSQuizMaster.pauseAutoQuiz()">❚❚ Pause</button>
               }
-              <button type="button" class="stage-btn" (click)="slido.nextAutoQuizStep()">Next Step →</button>
-              <button type="button" class="danger-btn" (click)="slido.stopAutoQuiz()">■ Stop</button>
+              <button type="button" class="stage-btn" (click)="ADSQuizMaster.nextAutoQuizStep()">Next Step →</button>
+              <button type="button" class="danger-btn" (click)="ADSQuizMaster.stopAutoQuiz()">■ Stop</button>
             </div>
           </div>
         } @else {
@@ -200,7 +200,7 @@ interface DraftOption {
               <button type="button" class="reveal-btn" (click)="revealAnswer(q)">
                 Lock &amp; Reveal
               </button>
-              <button type="button" (click)="slido.setPollState(q._id, 'draft', false)">
+              <button type="button" (click)="ADSQuizMaster.setPollState(q._id, 'draft', false)">
                 Hide
               </button>
             </div>
@@ -448,7 +448,7 @@ interface DraftOption {
   `]
 })
 export class QuizBuilderComponent implements OnInit, OnDestroy {
-  slido = inject(SlidoSocketService);
+  ADSQuizMaster = inject(ADSQuizMasterSocketService);
 
   private nextId = 5;
   private tickHandle: ReturnType<typeof setInterval> | null = null;
@@ -472,11 +472,11 @@ export class QuizBuilderComponent implements OnInit, OnDestroy {
   phaseSecondsLeft = signal<number | null>(null);
 
   quizQuestions = computed(() =>
-    this.slido.polls().filter((p) => p.type === 'quiz')
+    this.ADSQuizMaster.polls().filter((p) => p.type === 'quiz')
   );
 
   phaseText = computed(() => {
-    const phase = this.slido.quizAutoState().phase;
+    const phase = this.ADSQuizMaster.quizAutoState().phase;
     if (phase === 'question') return 'Answering';
     if (phase === 'reveal') return 'Revealing Answer';
     if (phase === 'leaderboard') return 'Leaderboard Break';
@@ -485,7 +485,7 @@ export class QuizBuilderComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.tickHandle = setInterval(() => {
-      const endsAt = this.slido.quizAutoState().phaseEndsAt;
+      const endsAt = this.ADSQuizMaster.quizAutoState().phaseEndsAt;
       if (!endsAt) {
         this.phaseSecondsLeft.set(null);
         return;
@@ -499,7 +499,7 @@ export class QuizBuilderComponent implements OnInit, OnDestroy {
   }
 
   startAutoQuiz(): void {
-    this.slido.startAutoQuiz({
+    this.ADSQuizMaster.startAutoQuiz({
       revealSeconds: Number(this.revealSeconds),
       leaderboardSeconds: Number(this.leaderboardSeconds),
       defaultTimerSeconds: Number(this.defaultTimerSeconds)
@@ -507,7 +507,7 @@ export class QuizBuilderComponent implements OnInit, OnDestroy {
   }
 
   startAutoFrom(poll: PollItem): void {
-    this.slido.startAutoQuiz({
+    this.ADSQuizMaster.startAutoQuiz({
       revealSeconds: Number(this.revealSeconds),
       leaderboardSeconds: Number(this.leaderboardSeconds),
       defaultTimerSeconds: Number(this.defaultTimerSeconds),
@@ -549,7 +549,7 @@ export class QuizBuilderComponent implements OnInit, OnDestroy {
 
     this.saving.set(true);
     try {
-      await this.slido.createPoll({
+      await this.ADSQuizMaster.createPoll({
         type: 'quiz',
         question: cleanQ,
         timerSeconds: Number(this.timerSeconds),
@@ -579,19 +579,19 @@ export class QuizBuilderComponent implements OnInit, OnDestroy {
   }
 
   startQuestionManual(poll: PollItem): void {
-    this.slido.setPollState(poll._id, 'active', false);
+    this.ADSQuizMaster.setPollState(poll._id, 'active', false);
   }
 
   revealAnswer(poll: PollItem): void {
-    this.slido.setPollState(poll._id, 'locked', true);
+    this.ADSQuizMaster.setPollState(poll._id, 'locked', true);
   }
 
   async deleteQuestion(pollId: string): Promise<void> {
-    await this.slido.deletePoll(pollId);
+    await this.ADSQuizMaster.deletePoll(pollId);
   }
 
   async resetScores(): Promise<void> {
     if (!confirm('Reset all quiz scores and clear previous quiz votes so you can run a fresh game?')) return;
-    await this.slido.resetQuizScores();
+    await this.ADSQuizMaster.resetQuizScores();
   }
 }

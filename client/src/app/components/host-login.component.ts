@@ -2,7 +2,7 @@ import { Component, inject, signal } from '@angular/core';
 import { FormsModule, NgForm } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { HostAuthService } from '../services/host-auth.service';
-import { SlidoSocketService } from '../services/slido-socket.service';
+import { ADSQuizMasterSocketService } from '../services/ADSQuizMaster-socket.service';
 
 @Component({
   selector: 'app-host-login',
@@ -121,7 +121,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
 })
 export class HostLoginComponent {
   private auth = inject(HostAuthService);
-  private slido = inject(SlidoSocketService);
+  private ADSQuizMaster = inject(ADSQuizMasterSocketService);
   private router = inject(Router);
 
   mode = signal<'login' | 'register'>('login');
@@ -152,7 +152,7 @@ export class HostLoginComponent {
       } else {
         await this.auth.login(this.email.trim(), this.password);
       }
-      this.slido.refreshSocketAuth();
+      this.ADSQuizMaster.refreshSocketAuth();
       await this.router.navigate(['/dashboard']);
     } catch (err: any) {
       this.errorMsg.set(err?.error?.error || 'Authentication failed');

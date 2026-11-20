@@ -1,7 +1,7 @@
 import { Component, HostListener, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { toDataURL } from 'qrcode';
-import { SlidoSocketService } from '../services/slido-socket.service';
+import { ADSQuizMasterSocketService } from '../services/ADSQuizMaster-socket.service';
 
 @Component({
   selector: 'app-present-view',
@@ -10,7 +10,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
     <div class="present-canvas">
       <aside class="qr-rail">
         <div class="brand-tag">Join at <strong>{{ joinHost }}</strong></div>
-        <div class="join-code">#{{ slido.joinCode() }}</div>
+        <div class="join-code">#{{ ADSQuizMaster.joinCode() }}</div>
 
         @if (qrDataUrl()) {
           <button class="qr-card" (click)="qrFullscreen.set(true)" title="Expand QR (Q)">
@@ -24,7 +24,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
             <strong>{{ approvedQuestions().length }}</strong>
             <span>Questions</span>
           </div>
-          @if (slido.activePoll()) {
+          @if (ADSQuizMaster.activePoll()) {
             <div class="metric">
               <strong>{{ totalVotes() }}</strong>
               <span>Votes</span>
@@ -34,7 +34,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
 
         <div class="controls">
           <button (click)="qrFullscreen.set(true)">QR [Q]</button>
-          @if (slido.leaderboard().length) {
+          @if (ADSQuizMaster.leaderboard().length) {
             <button (click)="showLeaderboard.set(!showLeaderboard())">
               {{ showLeaderboard() ? 'Stage' : 'Scores' }} [L]
             </button>
@@ -45,14 +45,14 @@ import { SlidoSocketService } from '../services/slido-socket.service';
 
       <main class="stage">
         <header class="stage-header">
-          <h1>{{ slido.eventTitle() || 'Live Session' }}</h1>
+          <h1>{{ ADSQuizMaster.eventTitle() || 'Live Session' }}</h1>
           <div class="header-pills">
-            @if (slido.quizAutoState().running) {
+            @if (ADSQuizMaster.quizAutoState().running) {
               <span class="stage-pill progress">
-                Q{{ slido.quizAutoState().currentIndex + 1 }} / {{ slido.quizAutoState().total }}
+                Q{{ ADSQuizMaster.quizAutoState().currentIndex + 1 }} / {{ ADSQuizMaster.quizAutoState().total }}
               </span>
             }
-            @if (slido.quizAutoState().paused) {
+            @if (ADSQuizMaster.quizAutoState().paused) {
               <span class="stage-pill paused">Paused</span>
             } @else if (activeCountdown() !== null) {
               <span class="stage-pill timer">⏱ {{ activeCountdown() }}s</span>
@@ -64,13 +64,13 @@ import { SlidoSocketService } from '../services/slido-socket.service';
         @if (showLeaderboard()) {
           <section class="leaderboard-stage">
             <div class="lb-heading">
-              <h2>{{ slido.quizAutoState().phase === 'finished' ? 'Final Quiz Leaderboard' : 'Quiz Leaderboard' }}</h2>
-              @if (slido.quizAutoState().running && slido.quizAutoState().phase === 'leaderboard' && phaseSecondsLeft() !== null) {
+              <h2>{{ ADSQuizMaster.quizAutoState().phase === 'finished' ? 'Final Quiz Leaderboard' : 'Quiz Leaderboard' }}</h2>
+              @if (ADSQuizMaster.quizAutoState().running && ADSQuizMaster.quizAutoState().phase === 'leaderboard' && phaseSecondsLeft() !== null) {
                 <span class="next-banner">Next question in {{ phaseSecondsLeft() }}s...</span>
               }
             </div>
             <ol class="podium-list">
-              @for (entry of slido.leaderboard().slice(0, 6); track entry.displayName; let idx = $index) {
+              @for (entry of ADSQuizMaster.leaderboard().slice(0, 6); track entry.displayName; let idx = $index) {
                 <li [class.leader]="idx === 0">
                   <span class="rank">#{{ idx + 1 }}</span>
                   <span class="player">{{ entry.displayName }}</span>
@@ -82,7 +82,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
             </ol>
           </section>
         } @else {
-          @if (slido.activePoll(); as poll) {
+          @if (ADSQuizMaster.activePoll(); as poll) {
             <section class="poll-stage">
               <h2 class="poll-question">{{ poll.question }}</h2>
 
@@ -118,7 +118,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
 
               @if (poll.type === 'word_cloud' || poll.type === 'open_text') {
                 <div class="cloud-wall">
-                  @for (item of slido.wordCloud(); track item.word) {
+                  @for (item of ADSQuizMaster.wordCloud(); track item.word) {
                     <span
                       class="cloud-word"
                       [style.fontSize.rem]="wordFontRem(item.count)"
@@ -130,7 +130,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
               }
 
               @if (poll.type === 'rating') {
-                @if (slido.ratingSummary(); as rs) {
+                @if (ADSQuizMaster.ratingSummary(); as rs) {
                   <div class="rating-stage">
                     <div class="rating-score">{{ rs.average }} <span>/ 5 ★</span></div>
                     <p>{{ rs.count }} audience ratings</p>
@@ -187,7 +187,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
         <div class="qr-overlay" (click)="qrFullscreen.set(false)">
           <div class="qr-overlay-box" (click)="$event.stopPropagation()">
             <p class="overlay-kicker">Join live at {{ joinHost }}</p>
-            <div class="overlay-code">#{{ slido.joinCode() }}</div>
+            <div class="overlay-code">#{{ ADSQuizMaster.joinCode() }}</div>
             <img [src]="qrDataUrl()" alt="Fullscreen join QR code" />
             <button class="close-btn" (click)="qrFullscreen.set(false)">Dismiss [Esc]</button>
           </div>
@@ -417,27 +417,27 @@ import { SlidoSocketService } from '../services/slido-socket.service';
   `]
 })
 export class PresentViewComponent implements OnInit, OnDestroy {
-  slido = inject(SlidoSocketService);
+  ADSQuizMaster = inject(ADSQuizMasterSocketService);
   private route = inject(ActivatedRoute);
 
   qrDataUrl = signal('');
   qrFullscreen = signal(false);
-  showLeaderboard = this.slido.stageLeaderboard;
+  showLeaderboard = this.ADSQuizMaster.stageLeaderboard;
   pollSecondsLeft = signal<number | null>(null);
   phaseSecondsLeft = signal<number | null>(null);
   joinHost = window.location.host;
   private tickHandle: ReturnType<typeof setInterval> | null = null;
 
   approvedQuestions = computed(() =>
-    this.slido.questions().filter((q) => q.status === 'approved')
+    this.ADSQuizMaster.questions().filter((q) => q.status === 'approved')
   );
 
   highlightedQuestion = computed(() =>
-    this.slido.questions().find((q) => q.isHighlighted && q.status !== 'archived') || null
+    this.ADSQuizMaster.questions().find((q) => q.isHighlighted && q.status !== 'archived') || null
   );
 
   activeCountdown = computed(() => {
-    const auto = this.slido.quizAutoState();
+    const auto = this.ADSQuizMaster.quizAutoState();
     if (auto.running && !auto.paused) {
       return this.phaseSecondsLeft();
     }
@@ -445,7 +445,7 @@ export class PresentViewComponent implements OnInit, OnDestroy {
   });
 
   revealNextLabel = computed(() => {
-    const auto = this.slido.quizAutoState();
+    const auto = this.ADSQuizMaster.quizAutoState();
     const secs = this.phaseSecondsLeft();
     if (!auto.running || auto.phase !== 'reveal' || secs === null) return null;
     const isLast = auto.currentIndex + 1 >= auto.total;
@@ -455,25 +455,25 @@ export class PresentViewComponent implements OnInit, OnDestroy {
   });
 
   totalVotes = computed(() => {
-    const poll = this.slido.activePoll();
+    const poll = this.ADSQuizMaster.activePoll();
     if (!poll) return 0;
     if (poll.type === 'word_cloud' || poll.type === 'open_text') {
-      return this.slido.wordCloud().reduce((sum, w) => sum + w.count, 0);
+      return this.ADSQuizMaster.wordCloud().reduce((sum, w) => sum + w.count, 0);
     }
     if (poll.type === 'rating') {
-      return this.slido.ratingSummary()?.count || 0;
+      return this.ADSQuizMaster.ratingSummary()?.count || 0;
     }
     return poll.options.reduce((sum, o) => sum + o.votes, 0);
   });
 
   maxCloudCount = computed(() =>
-    Math.max(1, ...this.slido.wordCloud().map((w) => w.count))
+    Math.max(1, ...this.ADSQuizMaster.wordCloud().map((w) => w.count))
   );
 
   stageLabel = computed(() => {
     if (this.showLeaderboard()) return 'Leaderboard';
-    if (this.slido.activePoll()?.type === 'quiz') return 'Live Quiz';
-    if (this.slido.activePoll()) return 'Live Poll';
+    if (this.ADSQuizMaster.activePoll()?.type === 'quiz') return 'Live Quiz';
+    if (this.ADSQuizMaster.activePoll()) return 'Live Poll';
     if (this.highlightedQuestion()) return 'Spotlight';
     return 'Audience Q&A';
   });
@@ -481,17 +481,17 @@ export class PresentViewComponent implements OnInit, OnDestroy {
   async ngOnInit(): Promise<void> {
     this.tickHandle = setInterval(() => {
       const now = Date.now();
-      const pollEnd = this.slido.pollEndsAt();
+      const pollEnd = this.ADSQuizMaster.pollEndsAt();
       this.pollSecondsLeft.set(pollEnd ? Math.max(0, Math.ceil((pollEnd - now) / 1000)) : null);
 
-      const phaseEnd = this.slido.quizAutoState().phaseEndsAt;
+      const phaseEnd = this.ADSQuizMaster.quizAutoState().phaseEndsAt;
       this.phaseSecondsLeft.set(phaseEnd ? Math.max(0, Math.ceil((phaseEnd - now) / 1000)) : null);
     }, 250);
 
     const code = (this.route.snapshot.paramMap.get('code') || '').trim().toUpperCase();
     if (!code) return;
 
-    await this.slido.joinRoom(code, 'participant');
+    await this.ADSQuizMaster.joinRoom(code, 'participant');
 
     const joinUrl = `${window.location.origin}/join/${code}`;
     const dataUrl = await toDataURL(joinUrl, {
@@ -540,7 +540,7 @@ export class PresentViewComponent implements OnInit, OnDestroy {
     const key = e.key.toLowerCase();
     if (key === 'escape') this.qrFullscreen.set(false);
     if (key === 'q') this.qrFullscreen.update((v) => !v);
-    if (key === 'l' && this.slido.leaderboard().length) this.showLeaderboard.update((v) => !v);
+    if (key === 'l' && this.ADSQuizMaster.leaderboard().length) this.showLeaderboard.update((v) => !v);
     if (key === 'f') this.toggleFullscreen();
   }
 }
