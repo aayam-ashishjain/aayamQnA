@@ -1,4 +1,4 @@
-import { Component, HostListener, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, HostListener, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { toDataURL } from 'qrcode';
 import { SlidoSocketService } from '../services/slido-socket.service';
@@ -46,12 +46,29 @@ import { SlidoSocketService } from '../services/slido-socket.service';
       <main class="stage">
         <header class="stage-header">
           <h1>{{ slido.eventTitle() || 'Live Session' }}</h1>
-          <span class="stage-pill">{{ stageLabel() }}</span>
+          <div class="header-pills">
+            @if (slido.quizAutoState().running) {
+              <span class="stage-pill progress">
+                Q{{ slido.quizAutoState().currentIndex + 1 }} / {{ slido.quizAutoState().total }}
+              </span>
+            }
+            @if (slido.quizAutoState().paused) {
+              <span class="stage-pill paused">Paused</span>
+            } @else if (activeCountdown() !== null) {
+              <span class="stage-pill timer">⏱ {{ activeCountdown() }}s</span>
+            }
+            <span class="stage-pill">{{ stageLabel() }}</span>
+          </div>
         </header>
 
         @if (showLeaderboard()) {
           <section class="leaderboard-stage">
-            <h2>Quiz Leaderboard</h2>
+            <div class="lb-heading">
+              <h2>{{ slido.quizAutoState().phase === 'finished' ? 'Final Quiz Leaderboard' : 'Quiz Leaderboard' }}</h2>
+              @if (slido.quizAutoState().running && slido.quizAutoState().phase === 'leaderboard' && phaseSecondsLeft() !== null) {
+                <span class="next-banner">Next question in {{ phaseSecondsLeft() }}s...</span>
+              }
+            </div>
             <ol class="podium-list">
               @for (entry of slido.leaderboard().slice(0, 6); track entry.displayName; let idx = $index) {
                 <li [class.leader]="idx === 0">
@@ -59,97 +76,110 @@ import { SlidoSocketService } from '../services/slido-socket.service';
                   <span class="player">{{ entry.displayName }}</span>
                   <strong class="points">{{ entry.score }} pts</strong>
                 </li>
+              } @empty {
+                <li class="empty-row">No scores recorded yet.</li>
               }
             </ol>
           </section>
-        } @else if (slido.activePoll(); as poll) {
-          <section class="poll-stage">
-            <h2 class="poll-question">{{ poll.question }}</h2>
+        } @else {
+          @if (slido.activePoll(); as poll) {
+            <section class="poll-stage">
+              <h2 class="poll-question">{{ poll.question }}</h2>
 
-            @if (poll.type === 'multiple_choice' || poll.type === 'quiz') {
-              <div class="bar-chart">
-                @for (opt of poll.options; track opt._id) {
-                  <div
-                    class="bar-row"
-                    [class.correct]="poll.type === 'quiz' && poll.status === 'locked' && opt.isCorrect">
-                    <div class="bar-label-line">
-                      <span class="opt-text">{{ opt.text }}</span>
-                      @if (poll.showResults) {
-                        <span class="opt-stats">
-                          <strong>{{ votePercent(opt.votes) }}%</strong>
-                          <em>({{ opt.votes }})</em>
-                        </span>
-                      }
-                    </div>
-                    <div class="bar-track">
-                      <div
-                        class="bar-fill"
-                        [style.width.%]="poll.showResults ? barWidth(opt.votes) : 0">
+              @if (poll.type === 'multiple_choice' || poll.type === 'quiz') {
+                <div class="bar-chart">
+                  @for (opt of poll.options; track opt._id) {
+                    <div
+                      class="bar-row"
+                      [class.correct]="poll.type === 'quiz' && poll.status === 'locked' && opt.isCorrect">
+                      <div class="bar-label-line">
+                        <span class="opt-text">{{ opt.text }}</span>
+                        @if (poll.showResults) {
+                          <span class="opt-stats">
+                            <strong>{{ votePercent(opt.votes) }}%</strong>
+                            <em>({{ opt.votes }})</em>
+                          </span>
+                        }
+                      </div>
+                      <div class="bar-track">
+                        <div
+                          class="bar-fill"
+                          [style.width.%]="poll.showResults ? barWidth(opt.votes) : 0">
+                        </div>
                       </div>
                     </div>
+                  }
+                </div>
+
+                @if (!poll.showResults) {
+                  <p class="hidden-banner">Results hidden while voting is open</p>
+                }
+              }
+
+              @if (poll.type === 'word_cloud' || poll.type === 'open_text') {
+                <div class="cloud-wall">
+                  @for (item of slido.wordCloud(); track item.word) {
+                    <span
+                      class="cloud-word"
+                      [style.fontSize.rem]="wordFontRem(item.count)"
+                      [style.opacity]="wordOpacity(item.count)">
+                      {{ item.word }}
+                    </span>
+                  }
+                </div>
+              }
+
+              @if (poll.type === 'rating') {
+                @if (slido.ratingSummary(); as rs) {
+                  <div class="rating-stage">
+                    <div class="rating-score">{{ rs.average }} <span>/ 5 ★</span></div>
+                    <p>{{ rs.count }} audience ratings</p>
                   </div>
                 }
-              </div>
-
-              @if (!poll.showResults) {
-                <p class="hidden-banner">Results hidden by host — voting is open</p>
               }
-            }
 
-            @if (poll.type === 'word_cloud' || poll.type === 'open_text') {
-              <div class="cloud-wall">
-                @for (item of slido.wordCloud(); track item.word) {
-                  <span
-                    class="cloud-word"
-                    [style.fontSize.rem]="wordFontRem(item.count)"
-                    [style.opacity]="wordOpacity(item.count)">
-                    {{ item.word }}
-                  </span>
+              <footer class="poll-footer">
+                <span>{{ totalVotes() }} total responses</span>
+
+                @if (revealNextLabel(); as label) {
+                  <span class="next-banner">{{ label }}</span>
                 }
-              </div>
-            }
 
-            @if (poll.type === 'rating' && slido.ratingSummary(); as rs) {
-              <div class="rating-stage">
-                <div class="rating-score">{{ rs.average }} <span>/ 5 ★</span></div>
-                <p>{{ rs.count }} audience ratings</p>
-              </div>
-            }
-
-            <footer class="poll-footer">
-              <span>{{ totalVotes() }} total responses</span>
-              <span class="status-badge" [class.locked]="poll.status === 'locked'">
-                {{ poll.status === 'locked' ? 'Voting Locked' : 'Voting Open' }}
-              </span>
-            </footer>
-          </section>
-        } @else if (highlightedQuestion(); as spotlight) {
-          <section class="spotlight-stage">
-            <div class="spotlight-card">
-              <div class="spotlight-top">
-                <span class="spotlight-tag">Live Q&amp;A Spotlight</span>
-                <span class="upvote-pill">▲ {{ spotlight.upvotes }}</span>
-              </div>
-              <p class="spotlight-text">{{ spotlight.text }}</p>
-              <div class="spotlight-author">— {{ spotlight.authorName }}</div>
-            </div>
-          </section>
-        } @else {
-          <section class="qa-wall">
-            @for (q of approvedQuestions().slice(0, 4); track q._id) {
-              <article class="wall-card">
-                <div class="wall-votes">▲ {{ q.upvotes }}</div>
-                <div class="wall-body">
-                  <p>{{ q.text }}</p>
-                  <small>{{ q.authorName }}</small>
+                <span class="status-badge" [class.locked]="poll.status === 'locked'">
+                  {{ poll.status === 'locked' ? 'Voting Locked' : 'Voting Open' }}
+                </span>
+              </footer>
+            </section>
+          } @else {
+            @if (highlightedQuestion(); as spotlight) {
+              <section class="spotlight-stage">
+                <div class="spotlight-card">
+                  <div class="spotlight-top">
+                    <span class="spotlight-tag">Live Q&amp;A Spotlight</span>
+                    <span class="upvote-pill">▲ {{ spotlight.upvotes }}</span>
+                  </div>
+                  <p class="spotlight-text">{{ spotlight.text }}</p>
+                  <div class="spotlight-author">— {{ spotlight.authorName }}</div>
                 </div>
-              </article>
-            } @empty {
-              <div class="empty-stage">
-                <p>Scan the QR code to ask the first question.</p>
-              </div>
+              </section>
+            } @else {
+              <section class="qa-wall">
+                @for (q of approvedQuestions().slice(0, 4); track q._id) {
+                  <article class="wall-card">
+                    <div class="wall-votes">▲ {{ q.upvotes }}</div>
+                    <div class="wall-body">
+                      <p>{{ q.text }}</p>
+                      <small>{{ q.authorName }}</small>
+                    </div>
+                  </article>
+                } @empty {
+                  <div class="empty-stage">
+                    <p>Scan the QR code to ask the first question.</p>
+                  </div>
+                }
+              </section>
             }
-          </section>
+          }
         }
       </main>
 
@@ -237,6 +267,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
       padding-bottom: 1rem;
     }
     .stage-header h1 { margin: 0; font-size: clamp(1.5rem, 2.2vw, 2.2rem); font-weight: 700; }
+    .header-pills { display: flex; gap: 0.6rem; align-items: center; }
     .stage-pill {
       background: #1e293b;
       color: #38bdf8;
@@ -247,6 +278,9 @@ import { SlidoSocketService } from '../services/slido-socket.service';
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
+    .stage-pill.progress { background: #0c4a6e; color: #e0f2fe; }
+    .stage-pill.timer { background: #78350f; color: #fde68a; }
+    .stage-pill.paused { background: #475569; color: #f8fafc; }
 
     .poll-stage { display: flex; flex-direction: column; flex: 1; justify-content: center; }
     .poll-question { font-size: clamp(2rem, 3.4vw, 3.2rem); line-height: 1.2; margin: 0 0 2.25rem; }
@@ -276,8 +310,17 @@ import { SlidoSocketService } from '../services/slido-socket.service';
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 1rem;
       font-size: 1.15rem;
       color: #94a3b8;
+    }
+    .next-banner {
+      background: #1e293b;
+      color: #fde68a;
+      padding: 0.4rem 1rem;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 1rem;
     }
     .status-badge { padding: 0.35rem 0.9rem; border-radius: 8px; background: #064e3b; color: #6ee7b7; font-weight: 700; }
     .status-badge.locked { background: #7f1d1d; color: #fca5a5; }
@@ -319,7 +362,8 @@ import { SlidoSocketService } from '../services/slido-socket.service';
     .wall-body small { font-size: 1.05rem; color: #94a3b8; }
     .empty-stage { margin: auto; font-size: 2rem; color: #64748b; }
 
-    .leaderboard-stage h2 { font-size: 2.5rem; margin: 0 0 1.5rem; }
+    .lb-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .leaderboard-stage h2 { font-size: 2.5rem; margin: 0; }
     .podium-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 1rem; }
     .podium-list li {
       display: grid;
@@ -332,6 +376,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
       font-size: 1.65rem;
     }
     .podium-list li.leader { border-color: #facc15; background: #1c1917; }
+    .podium-list li.empty-row { grid-template-columns: 1fr; color: #94a3b8; text-align: center; }
     .rank { color: #94a3b8; font-weight: 800; }
     .leader .rank { color: #facc15; }
     .points { color: #38bdf8; }
@@ -371,14 +416,17 @@ import { SlidoSocketService } from '../services/slido-socket.service';
     }
   `]
 })
-export class PresentViewComponent implements OnInit {
+export class PresentViewComponent implements OnInit, OnDestroy {
   slido = inject(SlidoSocketService);
   private route = inject(ActivatedRoute);
 
   qrDataUrl = signal('');
   qrFullscreen = signal(false);
-  showLeaderboard = signal(false);
+  showLeaderboard = this.slido.stageLeaderboard;
+  pollSecondsLeft = signal<number | null>(null);
+  phaseSecondsLeft = signal<number | null>(null);
   joinHost = window.location.host;
+  private tickHandle: ReturnType<typeof setInterval> | null = null;
 
   approvedQuestions = computed(() =>
     this.slido.questions().filter((q) => q.status === 'approved')
@@ -387,6 +435,24 @@ export class PresentViewComponent implements OnInit {
   highlightedQuestion = computed(() =>
     this.slido.questions().find((q) => q.isHighlighted && q.status !== 'archived') || null
   );
+
+  activeCountdown = computed(() => {
+    const auto = this.slido.quizAutoState();
+    if (auto.running && !auto.paused) {
+      return this.phaseSecondsLeft();
+    }
+    return this.pollSecondsLeft();
+  });
+
+  revealNextLabel = computed(() => {
+    const auto = this.slido.quizAutoState();
+    const secs = this.phaseSecondsLeft();
+    if (!auto.running || auto.phase !== 'reveal' || secs === null) return null;
+    const isLast = auto.currentIndex + 1 >= auto.total;
+    if (isLast) return `Final leaderboard in ${secs}s...`;
+    if (auto.leaderboardSeconds > 0) return `Leaderboard in ${secs}s...`;
+    return `Next question in ${secs}s...`;
+  });
 
   totalVotes = computed(() => {
     const poll = this.slido.activePoll();
@@ -406,12 +472,22 @@ export class PresentViewComponent implements OnInit {
 
   stageLabel = computed(() => {
     if (this.showLeaderboard()) return 'Leaderboard';
+    if (this.slido.activePoll()?.type === 'quiz') return 'Live Quiz';
     if (this.slido.activePoll()) return 'Live Poll';
     if (this.highlightedQuestion()) return 'Spotlight';
     return 'Audience Q&A';
   });
 
   async ngOnInit(): Promise<void> {
+    this.tickHandle = setInterval(() => {
+      const now = Date.now();
+      const pollEnd = this.slido.pollEndsAt();
+      this.pollSecondsLeft.set(pollEnd ? Math.max(0, Math.ceil((pollEnd - now) / 1000)) : null);
+
+      const phaseEnd = this.slido.quizAutoState().phaseEndsAt;
+      this.phaseSecondsLeft.set(phaseEnd ? Math.max(0, Math.ceil((phaseEnd - now) / 1000)) : null);
+    }, 250);
+
     const code = (this.route.snapshot.paramMap.get('code') || '').trim().toUpperCase();
     if (!code) return;
 
@@ -425,6 +501,10 @@ export class PresentViewComponent implements OnInit {
       color: { dark: '#000000', light: '#ffffff' }
     });
     this.qrDataUrl.set(dataUrl);
+  }
+
+  ngOnDestroy(): void {
+    if (this.tickHandle) clearInterval(this.tickHandle);
   }
 
   votePercent(count: number): number {

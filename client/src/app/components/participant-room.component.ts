@@ -1,4 +1,4 @@
-import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { SlidoSocketService } from '../services/slido-socket.service';
@@ -62,9 +62,31 @@ import { SlidoSocketService } from '../services/slido-socket.service';
           }
         </div>
       } @else {
+        @if (slido.quizAutoState().phase === 'finished') {
+          <div class="quiz-banner done">
+            Quiz finished! Check the main screen for the final leaderboard.
+          </div>
+        } @else if (slido.quizAutoState().running) {
+          <div class="quiz-banner">
+            <span>Question {{ slido.quizAutoState().currentIndex + 1 }} of {{ slido.quizAutoState().total }}</span>
+            @if (slido.quizAutoState().paused) {
+              <strong>Paused</strong>
+            } @else if (slido.quizAutoState().phase === 'reveal' && phaseSecondsLeft() !== null) {
+              <strong>Next in {{ phaseSecondsLeft() }}s</strong>
+            } @else if (slido.quizAutoState().phase === 'leaderboard' && phaseSecondsLeft() !== null) {
+              <strong>Leaderboard · Next Q in {{ phaseSecondsLeft() }}s</strong>
+            }
+          </div>
+        }
+
         @if (slido.activePoll(); as poll) {
           <section class="card poll-card">
-            <h3>{{ poll.question }}</h3>
+            <div class="poll-head">
+              <h3>{{ poll.question }}</h3>
+              @if (secondsLeft() !== null) {
+                <span class="timer-pill">⏱ {{ secondsLeft() }}s</span>
+              }
+            </div>
 
             @if (poll.type === 'multiple_choice' || poll.type === 'quiz') {
               @if (poll.type === 'quiz') {
@@ -74,9 +96,16 @@ import { SlidoSocketService } from '../services/slido-socket.service';
                 @for (opt of poll.options; track opt._id) {
                   <button
                     class="option-btn"
-                    [disabled]="poll.status === 'locked'"
+                    [class.selected]="selectedOptionId() === opt._id"
+                    [class.correct]="poll.type === 'quiz' && poll.status === 'locked' && opt.isCorrect"
+                    [disabled]="poll.status === 'locked' || !!selectedOptionId()"
                     (click)="voteOption(poll._id, opt._id)">
-                    <span>{{ opt.text }}</span>
+                    <span>
+                      {{ opt.text }}
+                      @if (selectedOptionId() === opt._id && !poll.showResults) {
+                        <em class="voted-tag">Selected</em>
+                      }
+                    </span>
                     @if (poll.showResults) {
                       <strong>{{ votePercent(opt.votes) }}% ({{ opt.votes }})</strong>
                     }
@@ -134,12 +163,36 @@ import { SlidoSocketService } from '../services/slido-socket.service';
     }
     .tabs button.active { background: #0f172a; color: #ffffff; }
     .dot { color: #22c55e; margin-left: 0.2rem; }
+    .quiz-banner {
+      background: #0f172a;
+      color: #f8fafc;
+      border-radius: 12px;
+      padding: 0.7rem 1rem;
+      margin-bottom: 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.9rem;
+    }
+    .quiz-banner strong { color: #fde68a; }
+    .quiz-banner.done { background: #065f46; color: #ecfdf5; justify-content: center; font-weight: 700; }
     .card {
       background: #ffffff;
       border-radius: 14px;
       padding: 1.15rem;
       box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
       margin-bottom: 1rem;
+    }
+    .poll-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
+    .poll-head h3 { margin: 0; }
+    .timer-pill {
+      background: #fef3c7;
+      color: #92400e;
+      font-weight: 800;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      white-space: nowrap;
+      font-size: 0.9rem;
     }
     .join-box { display: flex; flex-direction: column; gap: 0.85rem; }
     .join-box input, .ask-box textarea, .ask-box input, .text-vote-form input, .player-input {
@@ -174,33 +227,59 @@ import { SlidoSocketService } from '../services/slido-socket.service';
       background: #f8fafc;
       text-align: left;
     }
-    .player-input { margin-bottom: 0.75rem; }
-    .text-vote-form { display: flex; gap: 0.6rem; }
+    .option-btn.selected { border: 2px solid #0284c7; background: #e0f2fe; font-weight: 700; }
+    .option-btn.correct { border: 2px solid #10b981; background: #d1fae5; color: #065f46; font-weight: 700; }
+    .voted-tag {
+      font-style: normal;
+      font-size: 0.78rem;
+      margin-left: 0.5rem;
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      background: #0284c7;
+      color: #ffffff;
+    }
+    .player-input { margin-top: 0.85rem; }
+    .text-vote-form { display: flex; gap: 0.6rem; margin-top: 0.85rem; }
     .cloud { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; align-items: center; }
-    .stars { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .stars { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.85rem; }
     .star-btn { padding: 0.65rem 1rem; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; font-weight: 700; }
     .rating-meta { margin-top: 1rem; color: #475569; }
     .empty { text-align: center; color: #64748b; padding: 2rem; }
   `]
 })
-export class ParticipantRoomComponent implements OnInit {
+export class ParticipantRoomComponent implements OnInit, OnDestroy {
   slido = inject(SlidoSocketService);
   private route = inject(ActivatedRoute);
 
   tab = signal<'qa' | 'polls'>('qa');
+  secondsLeft = signal<number | null>(null);
+  phaseSecondsLeft = signal<number | null>(null);
+  selectedOptionId = signal<string | null>(null);
+
   codeInput = '';
   questionText = '';
   authorName = '';
   textVote = '';
+
   private pollShownAt = Date.now();
+  private lastPollId: string | null = null;
+  private tickHandle: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     effect(() => {
       const poll = this.slido.activePoll();
-      if (poll) {
+      if (poll && poll._id !== this.lastPollId) {
+        this.lastPollId = poll._id;
         this.pollShownAt = Date.now();
+        this.selectedOptionId.set(null);
+        if (poll.status === 'active') {
+          this.tab.set('polls');
+        }
+      } else if (!poll) {
+        this.lastPollId = null;
+        this.selectedOptionId.set(null);
       }
-    });
+    }, { allowSignalWrites: true });
   }
 
   ngOnInit(): void {
@@ -208,6 +287,19 @@ export class ParticipantRoomComponent implements OnInit {
     if (code) {
       this.slido.joinRoom(code, 'participant');
     }
+
+    this.tickHandle = setInterval(() => {
+      const now = Date.now();
+      const endsAt = this.slido.pollEndsAt();
+      this.secondsLeft.set(endsAt ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : null);
+
+      const phaseEnd = this.slido.quizAutoState().phaseEndsAt;
+      this.phaseSecondsLeft.set(phaseEnd ? Math.max(0, Math.ceil((phaseEnd - now) / 1000)) : null);
+    }, 250);
+  }
+
+  ngOnDestroy(): void {
+    if (this.tickHandle) clearInterval(this.tickHandle);
   }
 
   visibleQuestions = computed(() =>
@@ -235,6 +327,8 @@ export class ParticipantRoomComponent implements OnInit {
   }
 
   voteOption(pollId: string, optionId: string): void {
+    if (this.selectedOptionId()) return;
+    this.selectedOptionId.set(optionId);
     this.slido.castVote({
       pollId,
       optionId,

@@ -39,12 +39,38 @@ export interface PollItem {
   options: PollOption[];
   status: 'draft' | 'active' | 'locked';
   showResults: boolean;
+  timerSeconds?: number;
+  surveyGroupId?: string | null;
 }
 
 export interface RatingSummary {
   count: number;
   average: number;
 }
+
+export interface QuizAutoState {
+  running: boolean;
+  paused: boolean;
+  phase: 'idle' | 'question' | 'reveal' | 'leaderboard' | 'finished';
+  currentIndex: number;
+  total: number;
+  currentPollId: string | null;
+  phaseEndsAt: number | null;
+  revealSeconds: number;
+  leaderboardSeconds: number;
+}
+
+const DEFAULT_AUTO_STATE: QuizAutoState = {
+  running: false,
+  paused: false,
+  phase: 'idle',
+  currentIndex: 0,
+  total: 0,
+  currentPollId: null,
+  phaseEndsAt: null,
+  revealSeconds: 5,
+  leaderboardSeconds: 0
+};
 
 @Injectable({ providedIn: 'root' })
 export class SlidoSocketService {
@@ -66,6 +92,9 @@ export class SlidoSocketService {
   readonly ratingSummary = signal<RatingSummary | null>(null);
   readonly leaderboard = signal<{ displayName: string; score: number; correctCount?: number }[]>([]);
   readonly errorBanner = signal<string | null>(null);
+  readonly pollEndsAt = signal<number | null>(null);
+  readonly stageLeaderboard = signal(false);
+  readonly quizAutoState = signal<QuizAutoState>(DEFAULT_AUTO_STATE);
 
   constructor() {
     this.registerListeners();
@@ -101,15 +130,44 @@ export class SlidoSocketService {
       this.polls.update((list) => [...list, poll]);
     });
 
-    this.socket.on('poll:state', ({ poll, cloud, rating }: {
+    this.socket.on('poll:deleted', ({ pollId }: { pollId: string }) => {
+      this.polls.update((list) => list.filter((p) => p._id !== pollId));
+      if (this.activePoll()?._id === pollId) {
+        this.activePoll.set(null);
+        this.pollEndsAt.set(null);
+      }
+    });
+
+    this.socket.on('polls:sync', ({ polls, clearActiveQuiz }: { polls: PollItem[]; clearActiveQuiz?: boolean }) => {
+      this.polls.set(polls);
+      if (clearActiveQuiz && this.activePoll()?.type === 'quiz') {
+        this.activePoll.set(null);
+        this.pollEndsAt.set(null);
+      }
+    });
+
+    this.socket.on('poll:state', ({ poll, cloud, rating, endsAt }: {
       poll: PollItem;
       cloud: { word: string; count: number }[] | null;
       rating: RatingSummary | null;
+      endsAt?: number | null;
     }) => {
       this.polls.update((list) => list.map((p) => (p._id === poll._id ? poll : p)));
       this.activePoll.set(poll.status === 'draft' ? null : poll);
+      this.pollEndsAt.set(poll.status === 'active' ? (endsAt ?? null) : null);
       if (cloud) this.wordCloud.set(cloud);
       if (rating) this.ratingSummary.set(rating);
+    });
+
+    this.socket.on('stage:leaderboard', ({ show }: { show: boolean }) => {
+      this.stageLeaderboard.set(Boolean(show));
+    });
+
+    this.socket.on('quiz:autoState', (state: QuizAutoState) => {
+      this.quizAutoState.set(state || DEFAULT_AUTO_STATE);
+      if (state?.paused) {
+        this.pollEndsAt.set(null);
+      }
     });
 
     this.socket.on('quiz:leaderboard', (rows) => this.leaderboard.set(rows));
@@ -159,6 +217,9 @@ export class SlidoSocketService {
     this.leaderboard.set(data.leaderboard);
     this.wordCloud.set(data.activeCloud || []);
     this.ratingSummary.set(data.activeRating || null);
+    this.pollEndsAt.set(data.activeEndsAt || null);
+    this.stageLeaderboard.set(Boolean(data.stageLeaderboard));
+    this.quizAutoState.set(data.quizAutoState || DEFAULT_AUTO_STATE);
 
     const live = data.polls.find((p: PollItem) => p._id === data.event.activePollId) || null;
     this.activePoll.set(live);
@@ -201,6 +262,41 @@ export class SlidoSocketService {
     });
   }
 
+  setStageLeaderboard(show: boolean): void {
+    this.socket.emit('stage:leaderboard', {
+      joinCode: this.joinCode(),
+      show
+    });
+  }
+
+  startAutoQuiz(options: {
+    revealSeconds: number;
+    leaderboardSeconds: number;
+    defaultTimerSeconds: number;
+    startPollId?: string | null;
+  }): void {
+    this.socket.emit('quiz:startAuto', {
+      joinCode: this.joinCode(),
+      ...options
+    });
+  }
+
+  pauseAutoQuiz(): void {
+    this.socket.emit('quiz:pauseAuto', { joinCode: this.joinCode() });
+  }
+
+  resumeAutoQuiz(): void {
+    this.socket.emit('quiz:resumeAuto', { joinCode: this.joinCode() });
+  }
+
+  nextAutoQuizStep(): void {
+    this.socket.emit('quiz:nextAuto', { joinCode: this.joinCode() });
+  }
+
+  stopAutoQuiz(): void {
+    this.socket.emit('quiz:stopAuto', { joinCode: this.joinCode() });
+  }
+
   castVote(payload: {
     pollId: string;
     optionId?: string;
@@ -219,6 +315,18 @@ export class SlidoSocketService {
   createPoll(pollBody: Partial<PollItem>): Promise<PollItem> {
     return firstValueFrom(
       this.http.post<PollItem>(`${this.apiUrl}/api/events/${this.joinCode()}/polls`, pollBody)
+    );
+  }
+
+  deletePoll(pollId: string): Promise<{ deleted: string }> {
+    return firstValueFrom(
+      this.http.delete<{ deleted: string }>(`${this.apiUrl}/api/events/${this.joinCode()}/polls/${pollId}`)
+    );
+  }
+
+  resetQuizScores(): Promise<{ reset: boolean }> {
+    return firstValueFrom(
+      this.http.post<{ reset: boolean }>(`${this.apiUrl}/api/events/${this.joinCode()}/quiz/reset`, {})
     );
   }
 

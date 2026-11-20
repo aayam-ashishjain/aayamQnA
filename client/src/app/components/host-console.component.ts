@@ -1,12 +1,13 @@
-import { Component, OnInit, computed, inject } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { SlidoSocketService } from '../services/slido-socket.service';
+import { QuizBuilderComponent } from './quiz-builder.component';
 
 @Component({
   selector: 'app-host-console',
   standalone: true,
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, QuizBuilderComponent],
   template: `
     <div class="console-shell">
       <header class="console-header">
@@ -57,37 +58,51 @@ import { SlidoSocketService } from '../services/slido-socket.service';
         </section>
 
         <section class="panel">
-          <h3>Quick Poll Launcher</h3>
-          <form (ngSubmit)="addPoll()" class="poll-form">
-            <input [(ngModel)]="newPollQuestion" name="pq" placeholder="Poll question" required />
-            <select [(ngModel)]="newPollType" name="pt">
-              <option value="multiple_choice">Multiple Choice</option>
-              <option value="word_cloud">Word Cloud</option>
-              <option value="rating">Rating (1-5)</option>
-              <option value="open_text">Open Text</option>
-              <option value="quiz">Quiz (prefix * on correct option)</option>
-            </select>
-            @if (newPollType === 'multiple_choice' || newPollType === 'quiz') {
-              <input [(ngModel)]="rawOptions" name="opts" placeholder="Options (comma-separated, e.g. *Redis, Mongo, Postgres)" />
-            }
-            <button type="submit" class="primary-btn">Save Draft</button>
-          </form>
+          <div class="panel-tabs">
+            <button type="button" (click)="rightTab.set('polls')" [class.active]="rightTab() === 'polls'">
+              Live Polls ({{ standardPolls().length }})
+            </button>
+            <button type="button" (click)="rightTab.set('quiz')" [class.active]="rightTab() === 'quiz'">
+              Quiz Studio ({{ quizCount() }})
+            </button>
+          </div>
 
-          @for (p of slido.polls(); track p._id) {
-            <div class="poll-row">
-              <div>
-                <strong>{{ p.question }}</strong>
-                <small>{{ p.type }} · {{ p.status }}</small>
+          @if (rightTab() === 'polls') {
+            <form (ngSubmit)="addPoll()" class="poll-form">
+              <input [(ngModel)]="newPollQuestion" name="pq" placeholder="Poll question" required />
+              <select [(ngModel)]="newPollType" name="pt">
+                <option value="multiple_choice">Multiple Choice</option>
+                <option value="word_cloud">Word Cloud</option>
+                <option value="rating">Rating (1-5)</option>
+                <option value="open_text">Open Text</option>
+              </select>
+              @if (newPollType === 'multiple_choice') {
+                <input [(ngModel)]="rawOptions" name="opts" placeholder="Options (comma-separated)" />
+              }
+              <button type="submit" class="primary-btn">Save Poll Draft</button>
+            </form>
+
+            @for (p of standardPolls(); track p._id) {
+              <div class="poll-row">
+                <div class="poll-row-head">
+                  <div>
+                    <strong>{{ p.question }}</strong>
+                    <small>{{ p.type }} · {{ p.status }}</small>
+                  </div>
+                  <button type="button" class="text-danger" (click)="slido.deletePoll(p._id)">Delete</button>
+                </div>
+                <div class="btn-row">
+                  <button (click)="slido.setPollState(p._id, 'active', true)">Launch</button>
+                  <button (click)="slido.setPollState(p._id, 'active', false)">Launch Hidden</button>
+                  <button (click)="slido.setPollState(p._id, 'locked', true)">Lock</button>
+                  <button (click)="slido.setPollState(p._id, 'draft', false)">Hide</button>
+                </div>
               </div>
-              <div class="btn-row">
-                <button (click)="slido.setPollState(p._id, 'active', true)">Launch</button>
-                <button (click)="slido.setPollState(p._id, 'active', false)">Launch Hidden</button>
-                <button (click)="slido.setPollState(p._id, 'locked', true)">Lock</button>
-                <button (click)="slido.setPollState(p._id, 'draft', false)">Hide</button>
-              </div>
-            </div>
-          } @empty {
-            <p class="muted">No polls created yet.</p>
+            } @empty {
+              <p class="muted">No standard polls yet.</p>
+            }
+          } @else {
+            <app-quiz-builder />
           }
         </section>
       </div>
@@ -105,11 +120,23 @@ import { SlidoSocketService } from '../services/slido-socket.service';
     .host-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.25rem; }
     .panel { background: #ffffff; border-radius: 14px; padding: 1.25rem; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05); }
     .panel h3 { margin-top: 0; }
+    .panel-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .panel-tabs button {
+      flex: 1;
+      padding: 0.6rem;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      font-weight: 700;
+    }
+    .panel-tabs button.active { background: #0f172a; color: #ffffff; border-color: #0f172a; }
     .mod-card, .poll-row { border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.9rem; margin-bottom: 0.75rem; }
     .mod-card.pending { background: #fffbeb; border-color: #fde68a; }
     .mod-card.highlighted { border: 2px solid #0284c7; background: #f0f9ff; }
     .mod-card p { margin: 0 0 0.65rem; }
+    .poll-row-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }
     .poll-row small { display: block; color: #64748b; margin: 0.2rem 0 0.65rem; }
+    .text-danger { background: none; border: none; color: #b91c1c; font-size: 0.82rem; font-weight: 600; }
     .btn-row { display: flex; flex-wrap: wrap; gap: 0.45rem; }
     .btn-row button { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.35rem 0.7rem; font-size: 0.85rem; font-weight: 600; }
     .btn-row button.danger { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
@@ -123,12 +150,15 @@ export class HostConsoleComponent implements OnInit {
   slido = inject(SlidoSocketService);
   private route = inject(ActivatedRoute);
 
+  rightTab = signal<'polls' | 'quiz'>('quiz');
   newPollQuestion = '';
-  newPollType: 'multiple_choice' | 'word_cloud' | 'rating' | 'open_text' | 'quiz' = 'multiple_choice';
+  newPollType: 'multiple_choice' | 'word_cloud' | 'rating' | 'open_text' = 'multiple_choice';
   rawOptions = '';
 
   pending = computed(() => this.slido.questions().filter((q) => q.status === 'pending'));
   live = computed(() => this.slido.questions().filter((q) => q.status === 'approved'));
+  standardPolls = computed(() => this.slido.polls().filter((p) => p.type !== 'quiz'));
+  quizCount = computed(() => this.slido.polls().filter((p) => p.type === 'quiz').length);
 
   ngOnInit(): void {
     const code = this.route.snapshot.paramMap.get('code');
@@ -145,8 +175,8 @@ export class HostConsoleComponent implements OnInit {
       .filter(Boolean)
       .map((text) => ({
         _id: '',
-        text: text.replace(/^\*/, ''),
-        isCorrect: text.startsWith('*'),
+        text,
+        isCorrect: false,
         votes: 0
       }));
 

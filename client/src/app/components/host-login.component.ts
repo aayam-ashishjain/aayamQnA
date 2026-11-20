@@ -1,5 +1,5 @@
 import { Component, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { FormsModule, NgForm } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { HostAuthService } from '../services/host-auth.service';
 import { SlidoSocketService } from '../services/slido-socket.service';
@@ -17,26 +17,54 @@ import { SlidoSocketService } from '../services/slido-socket.service';
           <div class="error-toast">{{ errorMsg() }}</div>
         }
 
-        <form (ngSubmit)="submit()">
+        <form #authForm="ngForm" (ngSubmit)="submit(authForm)">
           @if (mode() === 'register') {
             <label>
               Full Name
-              <input [(ngModel)]="name" name="name" required placeholder="Ashish Jain" />
+              <input
+                [(ngModel)]="name"
+                #nameCtrl="ngModel"
+                name="name"
+                required
+                placeholder="Your name" />
+              @if (nameCtrl.invalid && nameCtrl.touched) {
+                <small class="field-err">Full Name is required.</small>
+              }
             </label>
           }
 
           <label>
             Email
-            <input [(ngModel)]="email" name="email" type="email" required placeholder="host@company.com" />
+            <input
+              [(ngModel)]="email"
+              #emailCtrl="ngModel"
+              name="email"
+              type="email"
+              email
+              required
+              placeholder="host@company.com" />
+            @if (emailCtrl.invalid && emailCtrl.touched) {
+              <small class="field-err">Enter a valid email address.</small>
+            }
           </label>
 
           <label>
             Password
-            <input [(ngModel)]="password" name="password" type="password" minlength="8" required placeholder="Min 8 characters" />
+            <input
+              [(ngModel)]="password"
+              #passCtrl="ngModel"
+              name="password"
+              type="password"
+              minlength="8"
+              required
+              placeholder="Min 8 characters" />
+            @if (passCtrl.invalid && passCtrl.touched) {
+              <small class="field-err">Password must be at least 8 characters.</small>
+            }
           </label>
 
           <button type="submit" class="primary-btn" [disabled]="busy()">
-            {{ mode() === 'login' ? 'Sign In' : 'Register & Continue' }}
+            {{ busy() ? 'Working...' : (mode() === 'login' ? 'Sign In' : 'Register & Continue') }}
           </button>
         </form>
 
@@ -69,6 +97,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
     form { display: flex; flex-direction: column; gap: 1rem; }
     label { display: flex; flex-direction: column; gap: 0.35rem; font-weight: 600; font-size: 0.9rem; }
     input { padding: 0.7rem 0.85rem; border: 1px solid #cbd5e1; border-radius: 8px; }
+    .field-err { color: #b91c1c; font-weight: 500; font-size: 0.82rem; }
     .primary-btn {
       background: #0284c7;
       color: #ffffff;
@@ -78,6 +107,7 @@ import { SlidoSocketService } from '../services/slido-socket.service';
       font-weight: 700;
       margin-top: 0.5rem;
     }
+    .primary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .auth-footer {
       margin-top: 1.25rem;
       display: flex;
@@ -107,14 +137,20 @@ export class HostLoginComponent {
     this.mode.update((m) => (m === 'login' ? 'register' : 'login'));
   }
 
-  async submit(): Promise<void> {
+  async submit(form: NgForm): Promise<void> {
+    if (form.invalid) {
+      form.control.markAllAsTouched();
+      this.errorMsg.set('Fix the highlighted fields before continuing.');
+      return;
+    }
+
     this.busy.set(true);
     this.errorMsg.set(null);
     try {
       if (this.mode() === 'register') {
-        await this.auth.register(this.name, this.email, this.password);
+        await this.auth.register(this.name.trim(), this.email.trim(), this.password);
       } else {
-        await this.auth.login(this.email, this.password);
+        await this.auth.login(this.email.trim(), this.password);
       }
       this.slido.refreshSocketAuth();
       await this.router.navigate(['/dashboard']);

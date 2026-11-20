@@ -1,76 +1,22 @@
-# Slido Clone (Turso + Express + Socket.IO + Angular 18)
+# Slido Clone (Turso + Express + Socket.IO + Angular 18) — v2
 
-Real-time audience Q&A, live polls (multiple choice, word cloud, rating, open text, speed-scored quiz), host moderation, JWT authentication, and a projector-ready Present Mode with scannable QR overlay.
+Real-time audience Q&A, live polls (multiple choice, word cloud, rating, open text), full Quiz Studio (timed auto-lock questions, correct-answer reveal, speed-scored leaderboard), host moderation, JWT authentication, and a projector-ready Present Mode with scannable QR overlay.
 
-## Project Layout
+## What Changed in v2
 
-```text
-slido-turso-angular/
-├── server/
-│   ├── db/turso.js
-│   ├── middleware/auth.js
-│   ├── middleware/qaRateLimit.js
-│   ├── server.js
-│   ├── .env.example
-│   └── package.json
-└── client/
-    └── src/app/
-        ├── components/
-        │   ├── host-login.component.ts
-        │   ├── host-dashboard.component.ts
-        │   ├── host-console.component.ts
-        │   ├── participant-room.component.ts
-        │   └── present-view.component.ts
-        ├── guards/host-auth.guard.ts
-        ├── interceptors/host-auth.interceptor.ts
-        └── services/
-            ├── host-auth.service.ts
-            └── slido-socket.service.ts
-```
+- Fixed Angular `NG5002` template alias errors in `present-view.component.ts`
+- Added inline Angular form validation in `host-login.component.ts` and field-specific validation in `server/server.js`
+- Added `QuizBuilderComponent` (`quiz-builder.component.ts`) and wired it into `host-console.component.ts`
+- Added server-side countdown timers, auto-lock + answer reveal, question deletion, score reset, and remote projector leaderboard toggle
 
-## 1. Backend Setup
+## Quick Upgrade (Keep Your Existing `server/.env` & `node_modules`)
 
-```bash
-cd server
-cp .env.example .env
-# Edit .env: set JWT_SECRET (required).
-# Leave TURSO_DATABASE_URL blank to use local file:slido.db during dev,
-# or fill in your Turso URL and token from the step below.
-npm install
-npm start
-```
-
-### Provision Turso (Mumbai Region)
-
-```bash
-turso auth login
-turso group create india --location aws-ap-south-1
-turso db create slido-app --group india
-turso db show slido-app --url
-turso db tokens create slido-app
-```
-
-Paste the URL and token into `server/.env`.
-
-## 2. Frontend Setup
-
-```bash
-cd client
-npm install
-npm start
-```
-
-Open `http://localhost:4200/login` to register a host account, create an event, and open:
-- `/host/:code` — Host moderation & poll control console
-- `/present/:code` — Fullscreen projector stage (`Q` = QR overlay, `L` = leaderboard, `F` = fullscreen)
-- `/join/:code` — Anonymous attendee room (linked automatically from the QR code)
-
-## 3. Push to GitHub
-
-```bash
-git init -b main
-git add .
-git commit -m "Initial Slido clone: Turso, Socket.IO, Angular Present Mode, JWT auth"
-git remote add origin https://github.com/<your-username>/<your-repo>.git
-git push -u origin main
-```
+Copy these 7 files from the unzipped folder into your existing workspace, then restart `server`:
+1. `server/server.js`
+2. `client/src/app/services/slido-socket.service.ts`
+3. `client/src/app/components/host-login.component.ts`
+4. `client/src/app/components/host-dashboard.component.ts`
+5. `client/src/app/components/host-console.component.ts`
+6. `client/src/app/components/quiz-builder.component.ts` (new file)
+7. `client/src/app/components/present-view.component.ts`
+8. `client/src/app/components/participant-room.component.ts`

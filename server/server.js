@@ -28,6 +28,61 @@ const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL || 'http://localhost:4200' }
 });
 
+const activePollTimers = new Map();
+const activePollEndsAt = new Map();
+const activeQuizRuns = new Map();
+const activeStageLeaderboard = new Map();
+
+function clearEventTimer(eventId) {
+  const existing = activePollTimers.get(eventId);
+  if (existing) {
+    clearTimeout(existing);
+    activePollTimers.delete(eventId);
+  }
+  activePollEndsAt.delete(eventId);
+}
+
+function getAutoStateSnapshot(eventId, overridePhase = null) {
+  const run = activeQuizRuns.get(eventId);
+  if (!run) {
+    return {
+      running: false,
+      paused: false,
+      phase: overridePhase || 'idle',
+      currentIndex: 0,
+      total: 0,
+      currentPollId: null,
+      phaseEndsAt: null,
+      revealSeconds: 5,
+      leaderboardSeconds: 0
+    };
+  }
+  return {
+    running: true,
+    paused: run.paused,
+    phase: run.phase,
+    currentIndex: run.currentIndex,
+    total: run.pollIds.length,
+    currentPollId: run.pollIds[run.currentIndex] || null,
+    phaseEndsAt: run.paused ? null : run.phaseEndsAt,
+    revealSeconds: run.revealSeconds,
+    leaderboardSeconds: run.leaderboardSeconds
+  };
+}
+
+function stopQuizRun(eventId, joinCode, emitUpdate = true, finalPhase = 'idle') {
+  const run = activeQuizRuns.get(eventId);
+  if (run?.timerHandle) {
+    clearTimeout(run.timerHandle);
+  }
+  activeQuizRuns.delete(eventId);
+  activePollEndsAt.delete(eventId);
+
+  if (emitUpdate && joinCode) {
+    io.to(joinCode).emit('quiz:autoState', getAutoStateSnapshot(eventId, finalPhase));
+  }
+}
+
 const generateCode = () => crypto.randomBytes(3).toString('hex').toUpperCase();
 const isUniqueViolation = (err) =>
   String(err?.code || '').includes('SQLITE_CONSTRAINT') ||
@@ -59,6 +114,27 @@ async function getPollWithOptions(pollId) {
     { sql: 'SELECT * FROM poll_options WHERE poll_id = ? ORDER BY sort_order ASC', args: [pollId] }
   ], 'read');
   return pollRes.rows[0] ? mapPoll(pollRes.rows[0], optRes.rows) : null;
+}
+
+async function getAllPollsForEvent(eventId) {
+  const [pRes, optRes] = await db.batch([
+    { sql: 'SELECT * FROM polls WHERE event_id = ? ORDER BY created_at ASC', args: [eventId] },
+    {
+      sql: `SELECT o.* FROM poll_options o
+            INNER JOIN polls p ON p.id = o.poll_id
+            WHERE p.event_id = ?
+            ORDER BY o.sort_order ASC`,
+      args: [eventId]
+    }
+  ], 'read');
+
+  const optionsByPoll = new Map();
+  for (const opt of optRes.rows) {
+    const list = optionsByPoll.get(opt.poll_id) || [];
+    list.push(opt);
+    optionsByPoll.set(opt.poll_id, list);
+  }
+  return pRes.rows.map((p) => mapPoll(p, optionsByPoll.get(p.id) || []));
 }
 
 async function buildWordCloud(pollId) {
@@ -116,16 +192,156 @@ async function buildPollPayload(poll) {
   const rating = poll.type === 'rating'
     ? await buildRatingSummary(poll._id)
     : null;
-  return { poll, cloud, rating };
+  const endsAt = poll.status === 'active'
+    ? (activePollEndsAt.get(poll.eventId) || null)
+    : null;
+  return { poll, cloud, rating, endsAt };
 }
 
-app.post('/api/auth/register', authLimiter, async (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const name = String(req.body.name || '').trim();
-  const password = String(req.body.password || '');
+// --- Server-Driven Auto-Quiz Engine ---
 
-  if (!email || !name || password.length < 8) {
-    return res.status(400).json({ error: 'Name, valid email, and 8+ char password are required' });
+async function runQuestionPhase(run, customDurationMs = null) {
+  if (activeQuizRuns.get(run.eventId) !== run) return;
+
+  while (run.currentIndex < run.pollIds.length) {
+    const pollId = run.pollIds[run.currentIndex];
+    const poll = await getPollWithOptions(pollId);
+    if (!poll) {
+      run.currentIndex += 1;
+      continue;
+    }
+
+    const durationMs = customDurationMs ?? ((poll.timerSeconds > 0 ? poll.timerSeconds : run.defaultTimerSeconds) * 1000);
+    await db.batch([
+      { sql: `UPDATE polls SET status = 'active', show_results = 0 WHERE id = ?`, args: [pollId] },
+      { sql: `UPDATE events SET active_poll_id = ? WHERE id = ?`, args: [pollId, run.eventId] }
+    ], 'write');
+
+    const freshPoll = await getPollWithOptions(pollId);
+    if (!freshPoll || activeQuizRuns.get(run.eventId) !== run) return;
+
+    run.phase = 'question';
+    run.paused = false;
+    run.remainingMs = null;
+    run.phaseEndsAt = Date.now() + durationMs;
+    activePollEndsAt.set(run.eventId, run.phaseEndsAt);
+    activeStageLeaderboard.set(run.eventId, false);
+
+    io.to(run.joinCode).emit('stage:leaderboard', { show: false });
+    io.to(run.joinCode).emit('poll:state', await buildPollPayload(freshPoll));
+    io.to(run.joinCode).emit('quiz:autoState', getAutoStateSnapshot(run.eventId));
+
+    run.timerHandle = setTimeout(() => {
+      runRevealPhase(run).catch((err) => console.error('Auto-quiz reveal error:', err));
+    }, durationMs);
+    return;
+  }
+
+  await finishQuizRun(run);
+}
+
+async function runRevealPhase(run, customDurationMs = null) {
+  if (activeQuizRuns.get(run.eventId) !== run) return;
+
+  const pollId = run.pollIds[run.currentIndex];
+  if (!pollId) {
+    await finishQuizRun(run);
+    return;
+  }
+
+  await db.execute({
+    sql: `UPDATE polls SET status = 'locked', show_results = 1 WHERE id = ?`,
+    args: [pollId]
+  });
+
+  const locked = await getPollWithOptions(pollId);
+  if (activeQuizRuns.get(run.eventId) !== run) return;
+
+  const durationMs = customDurationMs ?? (run.revealSeconds * 1000);
+  run.phase = 'reveal';
+  run.paused = false;
+  run.remainingMs = null;
+  run.phaseEndsAt = Date.now() + durationMs;
+  activePollEndsAt.delete(run.eventId);
+
+  if (locked) {
+    io.to(run.joinCode).emit('poll:state', await buildPollPayload(locked));
+  }
+  io.to(run.joinCode).emit('quiz:leaderboard', await getLeaderboard(run.eventId, 10));
+  io.to(run.joinCode).emit('quiz:autoState', getAutoStateSnapshot(run.eventId));
+
+  run.timerHandle = setTimeout(() => {
+    afterRevealPhase(run).catch((err) => console.error('Auto-quiz transition error:', err));
+  }, durationMs);
+}
+
+async function afterRevealPhase(run) {
+  if (activeQuizRuns.get(run.eventId) !== run) return;
+
+  const hasNext = run.currentIndex + 1 < run.pollIds.length;
+  if (!hasNext) {
+    await finishQuizRun(run);
+    return;
+  }
+
+  if (run.leaderboardSeconds > 0) {
+    await runIntermissionLeaderboard(run);
+    return;
+  }
+
+  run.currentIndex += 1;
+  await runQuestionPhase(run);
+}
+
+async function runIntermissionLeaderboard(run, customDurationMs = null) {
+  if (activeQuizRuns.get(run.eventId) !== run) return;
+
+  const durationMs = customDurationMs ?? (run.leaderboardSeconds * 1000);
+  run.phase = 'leaderboard';
+  run.paused = false;
+  run.remainingMs = null;
+  run.phaseEndsAt = Date.now() + durationMs;
+  activePollEndsAt.delete(run.eventId);
+  activeStageLeaderboard.set(run.eventId, true);
+
+  io.to(run.joinCode).emit('quiz:leaderboard', await getLeaderboard(run.eventId, 10));
+  io.to(run.joinCode).emit('stage:leaderboard', { show: true });
+  io.to(run.joinCode).emit('quiz:autoState', getAutoStateSnapshot(run.eventId));
+
+  run.timerHandle = setTimeout(() => {
+    if (activeQuizRuns.get(run.eventId) !== run) return;
+    run.currentIndex += 1;
+    runQuestionPhase(run).catch((err) => console.error('Auto-quiz next question error:', err));
+  }, durationMs);
+}
+
+async function finishQuizRun(run) {
+  const { eventId, joinCode } = run;
+  stopQuizRun(eventId, joinCode, false, 'finished');
+  activeStageLeaderboard.set(eventId, true);
+
+  io.to(joinCode).emit('quiz:leaderboard', await getLeaderboard(eventId, 10));
+  io.to(joinCode).emit('stage:leaderboard', { show: true });
+  io.to(joinCode).emit('quiz:autoState', getAutoStateSnapshot(eventId, 'finished'));
+}
+
+// --- Host Auth Routes ---
+
+app.post('/api/auth/register', authLimiter, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const name = String(req.body?.name || '').trim();
+  const password = String(req.body?.password || '');
+
+  if (!name) {
+    return res.status(400).json({ error: 'Full Name is required' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({
+      error: `Password must be at least 8 characters (received ${password.length})`
+    });
   }
 
   try {
@@ -148,8 +364,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 });
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const password = String(req.body.password || '');
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
 
   const resDb = await db.execute({
     sql: 'SELECT id, email, name, password_hash FROM hosts WHERE email = ?',
@@ -169,6 +385,8 @@ app.get('/api/auth/me', requireHost, (req, res) => {
   res.json({ host: { id: req.hostUser.sub, email: req.hostUser.email, name: req.hostUser.name } });
 });
 
+// --- Event, Poll & Quiz Routes ---
+
 app.get('/api/events', requireHost, async (req, res) => {
   const resDb = await db.execute({
     sql: 'SELECT * FROM events WHERE host_id = ? ORDER BY created_at DESC',
@@ -178,7 +396,7 @@ app.get('/api/events', requireHost, async (req, res) => {
 });
 
 app.post('/api/events', requireHost, async (req, res) => {
-  const title = String(req.body.title || '').trim();
+  const title = String(req.body?.title || '').trim();
   if (!title) return res.status(400).json({ error: 'Title is required' });
 
   const id = crypto.randomUUID();
@@ -187,7 +405,7 @@ app.post('/api/events', requireHost, async (req, res) => {
   await db.execute({
     sql: `INSERT INTO events (id, title, join_code, host_id, moderation_enabled)
           VALUES (?, ?, ?, ?, ?)`,
-    args: [id, title, joinCode, req.hostUser.sub, req.body.moderationEnabled ? 1 : 0]
+    args: [id, title, joinCode, req.hostUser.sub, req.body?.moderationEnabled ? 1 : 0]
   });
 
   const row = await getEventByCode(joinCode);
@@ -246,6 +464,9 @@ app.get('/api/events/:code', optionalHost, async (req, res) => {
   const activeRating = activePoll && activePoll.type === 'rating'
     ? await buildRatingSummary(activePoll._id)
     : null;
+  const activeEndsAt = activePoll && activePoll.status === 'active'
+    ? (activePollEndsAt.get(eventRow.id) || null)
+    : null;
 
   res.json({
     event: mapEvent(eventRow),
@@ -254,6 +475,9 @@ app.get('/api/events/:code', optionalHost, async (req, res) => {
     polls,
     activeCloud,
     activeRating,
+    activeEndsAt,
+    stageLeaderboard: Boolean(activeStageLeaderboard.get(eventRow.id)),
+    quizAutoState: getAutoStateSnapshot(eventRow.id),
     leaderboard: lbRes.rows.map((r) => ({
       displayName: r.display_name,
       score: Number(r.score),
@@ -270,7 +494,7 @@ app.post('/api/events/:code/polls', requireHost, async (req, res) => {
   }
 
   const pollId = crypto.randomUUID();
-  const options = Array.isArray(req.body.options) ? req.body.options : [];
+  const options = Array.isArray(req.body?.options) ? req.body.options : [];
 
   await db.batch([
     {
@@ -299,6 +523,69 @@ app.post('/api/events/:code/polls', requireHost, async (req, res) => {
   res.status(201).json(poll);
 });
 
+app.delete('/api/events/:code/polls/:pollId', requireHost, async (req, res) => {
+  const eventRow = await getEventByCode(req.params.code);
+  if (!eventRow) return res.status(404).json({ error: 'Room not found' });
+  if (eventRow.host_id !== req.hostUser.sub) {
+    return res.status(403).json({ error: 'Only the event host can delete questions' });
+  }
+
+  const { pollId } = req.params;
+  if (eventRow.active_poll_id === pollId) {
+    clearEventTimer(eventRow.id);
+    stopQuizRun(eventRow.id, eventRow.join_code, true, 'idle');
+  }
+
+  await db.batch([
+    { sql: 'DELETE FROM votes WHERE poll_id = ?', args: [pollId] },
+    { sql: 'DELETE FROM poll_options WHERE poll_id = ?', args: [pollId] },
+    { sql: 'DELETE FROM polls WHERE id = ? AND event_id = ?', args: [pollId, eventRow.id] },
+    { sql: 'UPDATE events SET active_poll_id = NULL WHERE id = ? AND active_poll_id = ?', args: [eventRow.id, pollId] }
+  ], 'write');
+
+  io.to(eventRow.join_code).emit('poll:deleted', { pollId });
+  res.json({ deleted: pollId });
+});
+
+app.post('/api/events/:code/quiz/reset', requireHost, async (req, res) => {
+  const eventRow = await getEventByCode(req.params.code);
+  if (!eventRow) return res.status(404).json({ error: 'Room not found' });
+  if (eventRow.host_id !== req.hostUser.sub) {
+    return res.status(403).json({ error: 'Only the event host can reset scores' });
+  }
+
+  clearEventTimer(eventRow.id);
+  stopQuizRun(eventRow.id, eventRow.join_code, true, 'idle');
+  activeStageLeaderboard.set(eventRow.id, false);
+
+  await db.batch([
+    { sql: 'DELETE FROM quiz_scores WHERE event_id = ?', args: [eventRow.id] },
+    {
+      sql: `DELETE FROM votes WHERE poll_id IN (SELECT id FROM polls WHERE event_id = ? AND type = 'quiz')`,
+      args: [eventRow.id]
+    },
+    {
+      sql: `UPDATE poll_options SET votes = 0 WHERE poll_id IN (SELECT id FROM polls WHERE event_id = ? AND type = 'quiz')`,
+      args: [eventRow.id]
+    },
+    {
+      sql: `UPDATE polls SET status = 'draft', show_results = 0 WHERE event_id = ? AND type = 'quiz'`,
+      args: [eventRow.id]
+    },
+    {
+      sql: `UPDATE events SET active_poll_id = NULL
+            WHERE id = ? AND active_poll_id IN (SELECT id FROM polls WHERE event_id = ? AND type = 'quiz')`,
+      args: [eventRow.id, eventRow.id]
+    }
+  ], 'write');
+
+  const polls = await getAllPollsForEvent(eventRow.id);
+  io.to(eventRow.join_code).emit('polls:sync', { polls, clearActiveQuiz: true });
+  io.to(eventRow.join_code).emit('quiz:leaderboard', []);
+  io.to(eventRow.join_code).emit('stage:leaderboard', { show: false });
+  res.json({ reset: true });
+});
+
 app.get('/api/events/:code/export/qa', requireHost, async (req, res) => {
   const eventRow = await getEventByCode(req.params.code);
   if (!eventRow) return res.status(404).json({ error: 'Room not found' });
@@ -320,6 +607,8 @@ app.get('/api/events/:code/export/qa', requireHost, async (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="${eventRow.join_code}-qa.csv"`);
   res.send(header + body);
 });
+
+// --- Socket.IO Auth & Real-Time Handlers ---
 
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
@@ -453,6 +742,9 @@ io.on('connection', (socket) => {
     const eventRow = await assertHostOwnsEvent(socket, joinCode);
     if (!eventRow) return;
 
+    clearEventTimer(eventRow.id);
+    stopQuizRun(eventRow.id, eventRow.join_code, true, 'idle');
+
     const sets = [];
     const args = [];
     if (status) { sets.push('status = ?'); args.push(status); }
@@ -471,7 +763,166 @@ io.on('connection', (socket) => {
     const poll = await getPollWithOptions(pollId);
     if (!poll) return;
 
+    if (status === 'active' && poll.timerSeconds > 0) {
+      const endsAt = Date.now() + poll.timerSeconds * 1000;
+      activePollEndsAt.set(eventRow.id, endsAt);
+
+      const timer = setTimeout(async () => {
+        clearEventTimer(eventRow.id);
+        const current = await getPollWithOptions(poll._id);
+        if (!current || current.status !== 'active') return;
+
+        await db.execute({
+          sql: `UPDATE polls SET status = 'locked', show_results = 1 WHERE id = ?`,
+          args: [poll._id]
+        });
+
+        const locked = await getPollWithOptions(poll._id);
+        if (locked) {
+          io.to(eventRow.join_code).emit('poll:state', await buildPollPayload(locked));
+        }
+      }, poll.timerSeconds * 1000);
+
+      activePollTimers.set(eventRow.id, timer);
+    }
+
+    if (status === 'active') {
+      activeStageLeaderboard.set(eventRow.id, false);
+      io.to(eventRow.join_code).emit('stage:leaderboard', { show: false });
+    }
+
     io.to(eventRow.join_code).emit('poll:state', await buildPollPayload(poll));
+  });
+
+  socket.on('stage:leaderboard', async ({ joinCode, show }) => {
+    const eventRow = await assertHostOwnsEvent(socket, joinCode);
+    if (!eventRow) return;
+    activeStageLeaderboard.set(eventRow.id, Boolean(show));
+    io.to(eventRow.join_code).emit('stage:leaderboard', { show: Boolean(show) });
+  });
+
+  // --- Auto-Quiz Socket Controls ---
+
+  socket.on('quiz:startAuto', async ({ joinCode, revealSeconds, leaderboardSeconds, defaultTimerSeconds, startPollId }) => {
+    const eventRow = await assertHostOwnsEvent(socket, joinCode);
+    if (!eventRow) return;
+
+    clearEventTimer(eventRow.id);
+    stopQuizRun(eventRow.id, eventRow.join_code, false, 'idle');
+
+    const qRes = await db.execute({
+      sql: `SELECT id FROM polls WHERE event_id = ? AND type = 'quiz' ORDER BY created_at ASC`,
+      args: [eventRow.id]
+    });
+    const pollIds = qRes.rows.map((r) => String(r.id));
+    if (!pollIds.length) {
+      socket.emit('poll:error', { message: 'Add at least one quiz question before starting.' });
+      return;
+    }
+
+    const requestedIndex = startPollId ? pollIds.indexOf(startPollId) : 0;
+    const startIndex = requestedIndex >= 0 ? requestedIndex : 0;
+
+    const run = {
+      eventId: eventRow.id,
+      joinCode: eventRow.join_code,
+      pollIds,
+      currentIndex: startIndex,
+      phase: 'question',
+      paused: false,
+      phaseEndsAt: null,
+      remainingMs: null,
+      revealSeconds: Math.min(30, Math.max(2, Number(revealSeconds ?? 5))),
+      leaderboardSeconds: Math.min(30, Math.max(0, Number(leaderboardSeconds ?? 0))),
+      defaultTimerSeconds: Math.min(120, Math.max(5, Number(defaultTimerSeconds ?? 20))),
+      timerHandle: null
+    };
+
+    activeQuizRuns.set(eventRow.id, run);
+    await runQuestionPhase(run);
+  });
+
+  socket.on('quiz:pauseAuto', async ({ joinCode }) => {
+    const eventRow = await assertHostOwnsEvent(socket, joinCode);
+    if (!eventRow) return;
+
+    const run = activeQuizRuns.get(eventRow.id);
+    if (!run || run.paused) return;
+
+    if (run.timerHandle) {
+      clearTimeout(run.timerHandle);
+      run.timerHandle = null;
+    }
+    run.remainingMs = Math.max(1000, (run.phaseEndsAt || Date.now()) - Date.now());
+    run.paused = true;
+    run.phaseEndsAt = null;
+    activePollEndsAt.delete(eventRow.id);
+
+    io.to(eventRow.join_code).emit('quiz:autoState', getAutoStateSnapshot(eventRow.id));
+  });
+
+  socket.on('quiz:resumeAuto', async ({ joinCode }) => {
+    const eventRow = await assertHostOwnsEvent(socket, joinCode);
+    if (!eventRow) return;
+
+    const run = activeQuizRuns.get(eventRow.id);
+    if (!run || !run.paused) return;
+
+    const ms = Math.max(1000, run.remainingMs || 3000);
+    run.paused = false;
+    run.remainingMs = null;
+    run.phaseEndsAt = Date.now() + ms;
+
+    if (run.phase === 'question') {
+      activePollEndsAt.set(eventRow.id, run.phaseEndsAt);
+      const currentPoll = await getPollWithOptions(run.pollIds[run.currentIndex]);
+      if (currentPoll) {
+        io.to(eventRow.join_code).emit('poll:state', await buildPollPayload(currentPoll));
+      }
+      run.timerHandle = setTimeout(() => {
+        runRevealPhase(run).catch((err) => console.error('Auto-quiz resume reveal error:', err));
+      }, ms);
+    } else if (run.phase === 'reveal') {
+      run.timerHandle = setTimeout(() => {
+        afterRevealPhase(run).catch((err) => console.error('Auto-quiz resume next error:', err));
+      }, ms);
+    } else if (run.phase === 'leaderboard') {
+      run.timerHandle = setTimeout(() => {
+        if (activeQuizRuns.get(run.eventId) !== run) return;
+        run.currentIndex += 1;
+        runQuestionPhase(run).catch((err) => console.error('Auto-quiz resume question error:', err));
+      }, ms);
+    }
+
+    io.to(eventRow.join_code).emit('quiz:autoState', getAutoStateSnapshot(eventRow.id));
+  });
+
+  socket.on('quiz:nextAuto', async ({ joinCode }) => {
+    const eventRow = await assertHostOwnsEvent(socket, joinCode);
+    if (!eventRow) return;
+
+    const run = activeQuizRuns.get(eventRow.id);
+    if (!run) return;
+
+    if (run.timerHandle) {
+      clearTimeout(run.timerHandle);
+      run.timerHandle = null;
+    }
+
+    if (run.phase === 'question') {
+      await runRevealPhase(run);
+    } else if (run.phase === 'reveal') {
+      await afterRevealPhase(run);
+    } else if (run.phase === 'leaderboard') {
+      run.currentIndex += 1;
+      await runQuestionPhase(run);
+    }
+  });
+
+  socket.on('quiz:stopAuto', async ({ joinCode }) => {
+    const eventRow = await assertHostOwnsEvent(socket, joinCode);
+    if (!eventRow) return;
+    stopQuizRun(eventRow.id, eventRow.join_code, true, 'idle');
   });
 
   socket.on('poll:vote', async ({ joinCode, pollId, clientId, displayName, optionId, textValue, ratingValue, responseMs }) => {

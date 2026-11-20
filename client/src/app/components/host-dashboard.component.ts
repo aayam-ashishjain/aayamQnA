@@ -20,13 +20,19 @@ import { EventItem, SlidoSocketService } from '../services/slido-socket.service'
         <button class="ghost-btn" (click)="logout()">Sign Out</button>
       </header>
 
+      @if (errorMsg()) {
+        <div class="error-toast">{{ errorMsg() }}</div>
+      }
+
       <form (ngSubmit)="createRoom()" class="create-bar">
         <input [(ngModel)]="title" name="title" placeholder="Event title (e.g. Q4 Engineering Town Hall)" required />
         <label class="toggle">
           <input type="checkbox" [(ngModel)]="moderationEnabled" name="mod" />
           Moderate Q&amp;A before publishing
         </label>
-        <button type="submit" class="primary-btn">Create Room</button>
+        <button type="submit" class="primary-btn" [disabled]="creating()">
+          {{ creating() ? 'Creating...' : 'Create Room' }}
+        </button>
       </form>
 
       <section class="event-list">
@@ -39,7 +45,9 @@ import { EventItem, SlidoSocketService } from '../services/slido-socket.service'
             <div class="actions">
               <a [routerLink]="['/host', ev.joinCode]" class="btn">Host Console</a>
               <a [routerLink]="['/present', ev.joinCode]" target="_blank" class="btn secondary">Present Mode</a>
-              <a [routerLink]="['/join', ev.joinCode]" target="_blank" class="btn secondary">Participant Link</a>
+              <button type="button" class="btn secondary" (click)="copyJoinUrl(ev.joinCode)">
+                {{ copiedCode() === ev.joinCode ? 'Copied!' : 'Copy Join Link' }}
+              </button>
             </div>
           </article>
         } @empty {
@@ -64,14 +72,14 @@ import { EventItem, SlidoSocketService } from '../services/slido-socket.service'
       margin-bottom: 1.5rem;
       box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
     }
-    .create-bar input[type="text"], .create-bar input:not([type="checkbox"]) {
+    .create-bar input:not([type="checkbox"]) {
       flex: 1;
       min-width: 220px;
       padding: 0.7rem 0.9rem;
       border: 1px solid #cbd5e1;
       border-radius: 8px;
     }
-    .toggle { display: flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; }
+    .toggle { display: flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; user-select: none; }
     .primary-btn { background: #0284c7; color: #fff; border: none; border-radius: 8px; padding: 0.75rem 1.25rem; font-weight: 700; }
     .ghost-btn { background: #e2e8f0; border: none; border-radius: 8px; padding: 0.55rem 1rem; font-weight: 600; }
     .event-list { display: flex; flex-direction: column; gap: 1rem; }
@@ -93,6 +101,7 @@ import { EventItem, SlidoSocketService } from '../services/slido-socket.service'
       text-decoration: none;
       background: #0f172a;
       color: #ffffff;
+      border: none;
       padding: 0.55rem 0.9rem;
       border-radius: 8px;
       font-size: 0.88rem;
@@ -108,19 +117,45 @@ export class HostDashboardComponent implements OnInit {
   private router = inject(Router);
 
   events = signal<EventItem[]>([]);
+  creating = signal(false);
+  errorMsg = signal<string | null>(null);
+  copiedCode = signal<string | null>(null);
+
   title = '';
   moderationEnabled = false;
 
   async ngOnInit(): Promise<void> {
-    await this.auth.loadProfile();
-    this.events.set(await this.slido.listHostEvents());
+    try {
+      await this.auth.loadProfile();
+      this.events.set(await this.slido.listHostEvents());
+    } catch {
+      this.errorMsg.set('Session expired. Please sign in again.');
+      await this.logout();
+    }
   }
 
   async createRoom(): Promise<void> {
     if (!this.title.trim()) return;
-    const created = await this.slido.createEvent(this.title.trim(), this.moderationEnabled);
-    this.events.update((list) => [created, ...list]);
-    this.title = '';
+    this.creating.set(true);
+    this.errorMsg.set(null);
+    try {
+      const created = await this.slido.createEvent(this.title.trim(), this.moderationEnabled);
+      this.events.update((list) => [created, ...list]);
+      this.title = '';
+    } catch (err: any) {
+      this.errorMsg.set(err?.error?.error || 'Could not create room');
+    } finally {
+      this.creating.set(false);
+    }
+  }
+
+  async copyJoinUrl(code: string): Promise<void> {
+    const url = `${window.location.origin}/join/${code}`;
+    await navigator.clipboard.writeText(url);
+    this.copiedCode.set(code);
+    setTimeout(() => {
+      if (this.copiedCode() === code) this.copiedCode.set(null);
+    }, 2000);
   }
 
   async logout(): Promise<void> {
